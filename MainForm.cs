@@ -17,8 +17,8 @@ public class MainForm : Form {
 		Text = "MHTML Viewer by Velcent";
 		Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
     	ShowIcon=true;
-		Width = 1400;
-		Height = 900;
+		Width = 1900;
+		Height = 1000;
 		// WindowState = FormWindowState.Maximized;
 		BaseRoot = Directory.GetCurrentDirectory();
 
