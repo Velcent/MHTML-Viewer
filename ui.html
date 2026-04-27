@@ -237,13 +237,18 @@
 					allElements.forEach(el => {
 						el.style.display = "";
 						el.classList.remove("open");
-
 						let a = el.querySelector(":scope > .row .arrow");
-
 						if (a && el.querySelector(":scope > .children"))
 							a.textContent = "► ";
 					});
+					/* root tetap expand */
 					expandRoot();
+					/* re-expand jalur item aktif */
+					let active = document.querySelector(".item.active");
+					if (active) {
+						expandParents(active);
+						active.scrollIntoView({ block: "nearest" });
+					}
 					return;
 				}
 
@@ -280,6 +285,37 @@
 		function restoreScroll() {
 			let y = localStorage.getItem("scrollY");
 			if (y) tree.scrollTop = parseInt(y);
+		}
+		
+		function setActiveByPath(path) {
+			console.log(path);
+			let nodes = document.querySelectorAll(".item");
+			for (let n of nodes) n.classList.remove("active");
+			for (let n of nodes) {
+				let p = n.dataset.path;
+				if (!p) continue;
+				if (p.toLowerCase() === path.toLowerCase()) {
+					n.classList.add("active");
+					expandParents(n);
+					n.scrollIntoView({ block: "nearest" });
+					break;
+				}
+			}
+		}
+
+		function openNode(item) {
+			item.classList.add("open");
+			let a = item.querySelector(":scope > .row .arrow");
+			if (a) a.textContent = "▼ ";
+		}
+		
+		function expandParents(node) {
+			let p = node.parentElement;
+			while (p) {
+				let item = p.closest(".item");
+				if (item) openNode(item);
+				p = item ? item.parentElement : null;
+			}
 		}
 	</script>
 </body>

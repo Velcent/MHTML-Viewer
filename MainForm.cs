@@ -54,7 +54,7 @@ public class MainForm : Form {
 			await navWeb.EnsureCoreWebView2Async(env);
 			await viewerWeb.EnsureCoreWebView2Async(env);
 
-			navWeb.CoreWebView2.Settings.AreDevToolsEnabled = false;
+			navWeb.CoreWebView2.Settings.AreDevToolsEnabled = true;
 			viewerWeb.CoreWebView2.Settings.AreDevToolsEnabled = false;
 
 			var first = FindFirstFile(BaseRoot);
@@ -114,8 +114,13 @@ public class MainForm : Form {
 					e.Cancel = true;
 					if (TryResolveMhtml(e.Uri, out string file, out string frag))
 						OpenMhtml(file, frag);
-					// else MessageBox.Show("LINK NOT FOUND");
 				}
+			};
+			viewerWeb.CoreWebView2.NavigationCompleted += async (s, e) => {
+				try {
+					string path = viewerWeb.Source.LocalPath.Replace("\\", "\\\\");
+					await navWeb.CoreWebView2.ExecuteScriptAsync($"setActiveByPath('{path}');");
+				} catch { }
 			};
 			// auto open first file
 			viewerWeb.Source = new Uri(first);
@@ -170,7 +175,7 @@ public class MainForm : Form {
 			return true;
 		return false;
 	}
-	void OpenMhtml(string file, string frag = "") {
+	void OpenMhtml(string file, string frag) {
 		viewerWeb.Source = new Uri(file);
 		if(!string.IsNullOrWhiteSpace(frag)) {
             async void OnLoaded(object? s, CoreWebView2NavigationCompletedEventArgs e) {
