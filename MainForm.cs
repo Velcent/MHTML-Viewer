@@ -96,7 +96,6 @@ public class MainForm : Form {
 				try {
 					var msg = JsonDocument.Parse(we.WebMessageAsJson);
 					string type = msg.RootElement.GetProperty("type").GetString()!;
-
 					if (type == "open") {
 						string fullPath = msg.RootElement.GetProperty("path").GetString()!;
 						if (File.Exists(fullPath)) {
@@ -105,6 +104,12 @@ public class MainForm : Form {
 							MessageBox.Show("File not found:\n" + fullPath);
 						}
 					}
+					if (type == "back")
+						if (viewerWeb.CoreWebView2.CanGoBack)
+							viewerWeb.CoreWebView2.GoBack();
+					if (type == "forward")
+						if (viewerWeb.CoreWebView2.CanGoForward)
+							viewerWeb.CoreWebView2.GoForward();
 				} catch (Exception ex) {
 					MessageBox.Show(ex.Message, "Open Error");
 				}

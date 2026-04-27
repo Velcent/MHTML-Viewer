@@ -20,7 +20,8 @@
 		}
 
 		#search {
-			margin: 10px;
+			flex: 1;
+			margin: 0;
 			padding: 10px;
 			border: none;
 			outline: none;
@@ -109,12 +110,46 @@
 		::-webkit-scrollbar-corner {
 			background: transparent;
 		}
+
+		#toolbarRow {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			padding: 10px;
+		}
+
+		#btnBack,
+		#btnForward {
+			width: 34px;
+			height: 34px;
+			flex: 0 0 34px;
+			border: none;
+			border-radius: 8px;
+			background: #2a2a30;
+			color: #ddd;
+			cursor: pointer;
+		}
+
+		#btnBack:hover,
+		#btnForward:hover {
+			background: #343a45;
+		}
+
+		#btnBack:disabled,
+		#btnForward:disabled {
+			opacity: .4;
+			cursor: default;
+		}
 	</style>
 </head>
 
 <body>
 	<div id="sidebar">
-		<input id="search" placeholder="Search...">
+		<div id="toolbarRow">
+			<button id="btnBack" onclick="goBack()">←</button>
+			<input id="search" placeholder="Search...">
+			<button id="btnForward" onclick="goForward()">→</button>
+		</div>
 		<div id="tree"></div>
 	</div>
 	<script>
@@ -177,6 +212,14 @@
 				};
 			}
 			return item;
+		}
+
+		function goBack() {
+			sendMessage({ type: "back" });
+		}
+
+		function goForward() {
+			sendMessage({ type: "forward" });
 		}
 
 		function openFile(path) {
@@ -286,7 +329,7 @@
 			let y = localStorage.getItem("scrollY");
 			if (y) tree.scrollTop = parseInt(y);
 		}
-		
+
 		function setActiveByPath(path) {
 			console.log(path);
 			let nodes = document.querySelectorAll(".item");
@@ -308,7 +351,7 @@
 			let a = item.querySelector(":scope > .row .arrow");
 			if (a) a.textContent = "▼ ";
 		}
-		
+
 		function expandParents(node) {
 			let p = node.parentElement;
 			while (p) {
