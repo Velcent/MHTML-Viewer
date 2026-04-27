@@ -1,6 +1,8 @@
 using System.Text.Json;
+using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using System.Text.RegularExpressions;
+using System.Collections.Concurrent;
 
 class Node {
 	public string name { get; set; } = string.Empty;
@@ -9,10 +11,11 @@ class Node {
 }
 
 public class MainForm : Form {
+	bool isUseCache = false;
 	WebView2 navWeb;
 	WebView2 viewerWeb;
 	string BaseRoot;
-
+	ConcurrentDictionary<string, string> ContentLocationMap = new(StringComparer.OrdinalIgnoreCase);
 	public MainForm() {
 		Text = "MHTML Viewer by Velcent";
 		Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
@@ -47,22 +50,26 @@ public class MainForm : Form {
 			string tempPath = Path.Combine(Path.GetTempPath(), "MHTMLViewer");
 			// Directory.CreateDirectory(tempPath);
 
-			var env = await Microsoft.Web.WebView2.Core
-				.CoreWebView2Environment
-				.CreateAsync(null, tempPath);
-
+			var env = await CoreWebView2Environment.CreateAsync(null, tempPath);
 			await navWeb.EnsureCoreWebView2Async(env);
 			await viewerWeb.EnsureCoreWebView2Async(env);
 
 			navWeb.CoreWebView2.Settings.AreDevToolsEnabled = false;
 			viewerWeb.CoreWebView2.Settings.AreDevToolsEnabled = false;
 
-			// auto open first file
 			var first = FindFirstFile(BaseRoot);
-			if (first != null) {
-				Text = Path.GetFileNameWithoutExtension(first);
-				viewerWeb.Source = new Uri(first);
-			}
+			if (first == null) return;
+			Text = Path.GetFileNameWithoutExtension(first);
+			// Cached Links
+			if(isUseCache) {
+				string idxPath = Path.Combine(tempPath, Text + ".idx");
+				if(File.Exists(idxPath)) {
+					LoadLinkIndex(idxPath);
+				} else {
+					BuildLinkIndex();
+					SaveLinkIndex(idxPath);
+				}
+			} else BuildLinkIndex();
 
 			var tree = BuildTree(BaseRoot);
 			string json = JsonSerializer.Serialize(tree);
@@ -79,13 +86,7 @@ public class MainForm : Form {
 			File.WriteAllText(tempUI, LoadEmbedded(uiName));
 
 			// map folder sebagai host internal
-			navWeb.CoreWebView2.SetVirtualHostNameToFolderMapping(
-					"app.local",
-					tempPath,
-					Microsoft.Web.WebView2.Core
-						.CoreWebView2HostResourceAccessKind
-						.Allow
-				);
+			navWeb.CoreWebView2.SetVirtualHostNameToFolderMapping("app.local", tempPath, CoreWebView2HostResourceAccessKind.Allow);
 
 			if (File.Exists(localUI)) navWeb.Source = new Uri(localUI);
 			else navWeb.Source = new Uri("https://app.local/" + uiName);
@@ -108,18 +109,80 @@ public class MainForm : Form {
 					MessageBox.Show(ex.Message, "Open Error");
 				}
 			};
-
-			// hyperlink in mhtml can navigate
-			viewerWeb.CoreWebView2.NavigationStarting += (x, ev) => {
-				if (ev.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase)){
-					ev.Cancel = true;
-					viewerWeb.Source = new Uri(ev.Uri);
+			viewerWeb.CoreWebView2.NavigationStarting += (s, e) => {
+				if (e.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase)) {
+					e.Cancel = true;
+					if (TryResolveMhtml(e.Uri, out string file, out string frag))
+						OpenMhtml(file, frag);
+					// else MessageBox.Show("LINK NOT FOUND");
 				}
 			};
-
+			// auto open first file
+			viewerWeb.Source = new Uri(first);
 		};
 	}
-
+	void BuildLinkIndex() {
+		Parallel.ForEach(
+			Directory.GetFiles(BaseRoot, "*.mhtml", SearchOption.AllDirectories),
+			new ParallelOptions{ MaxDegreeOfParallelism = 8 },
+			IndexContentLocations);
+	}
+	void IndexContentLocations(string file) {
+		using var sr = new StreamReader(file);
+		sr.ReadLine();
+		string line = sr.ReadLine()!;
+		if (line?.StartsWith("Snapshot-Content-Location:", StringComparison.OrdinalIgnoreCase) == true) {
+			string loc = line.Substring(26).Trim();
+			ContentLocationMap.TryAdd(loc, file);
+			string name = Path.GetFileName(loc);
+			if (!string.IsNullOrWhiteSpace(name)) {
+				ContentLocationMap.TryAdd(name, file);
+			}
+		}
+	}
+	void SaveLinkIndex(string idxPath){
+		File.WriteAllLines(idxPath, ContentLocationMap.Select( x => x.Key + "|" + x.Value));
+	}
+	void LoadLinkIndex(string idxPath) {
+		foreach (var line in File.ReadLines(idxPath)) {
+			int i = line.IndexOf('|');
+			if (i < 1) continue;
+			string k = line[..i];
+			string v = line[(i + 1)..];
+			ContentLocationMap[k] = v;
+		}
+	}
+	bool TryResolveMhtml(string url, out string file, out string fragment) {
+		file = string.Empty;
+		fragment = string.Empty;
+		// pisah #fragment
+		int i = url.IndexOf('#');
+		string baseUrl = url;
+		if (i >= 0) {
+			baseUrl = url[..i];
+			fragment = url[(i + 1)..];
+		}
+		// lookup pakai base url
+		if (ContentLocationMap.TryGetValue(baseUrl, out file!))
+			return true;
+		string name = Path.GetFileName(baseUrl);
+		if (ContentLocationMap.TryGetValue(name, out file!))
+			return true;
+		return false;
+	}
+	void OpenMhtml(string file, string frag = "") {
+		viewerWeb.Source = new Uri(file);
+		if(!string.IsNullOrWhiteSpace(frag)) {
+            async void OnLoaded(object? s, CoreWebView2NavigationCompletedEventArgs e) {
+                viewerWeb.CoreWebView2.NavigationCompleted -= OnLoaded;
+                await viewerWeb.CoreWebView2.ExecuteScriptAsync($@"
+					var el = document.getElementById('{frag}') || document.querySelector('[name=""{frag}""]');
+					if(el) el.scrollIntoView();
+				");
+            }
+            viewerWeb.CoreWebView2.NavigationCompleted += OnLoaded;
+		}
+	}
 	//==================
 	// BUILD TREE
 	//==================
@@ -145,6 +208,7 @@ public class MainForm : Form {
 
 		// ----- files -----
 		foreach (var f in Directory.GetFiles(root, "*.mhtml")) {
+			IndexContentLocations(f);
 			items.Add(
 				new Node {
 					name = Path.GetFileNameWithoutExtension(f),
