@@ -25,7 +25,8 @@ internal static class Program {
 		_ = app.InitializeAsync().ContinueWith(t => {
 			if (t.Exception != null) {
 				string error = t.Exception.GetBaseException().ToString();
-				File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "startup-error.txt"), error);
+				string tempPath = Path.Combine(Path.GetTempPath(), "MHTMLViewer");
+				File.WriteAllText(Path.Combine(tempPath, "startup-error.txt"), error);
 				NativeMethods.ShowMessage(app.Handle, error, "Startup Error");
 			}
 		}, TaskScheduler.FromCurrentSynchronizationContext());
@@ -76,6 +77,7 @@ internal sealed class WebViewHost : IDisposable {
 		if (!string.IsNullOrEmpty(first)) {
 			NativeMethods.SetWindowText(handle, Path.GetFileNameWithoutExtension(first));
 		}
+		NativeMethods.SetWindowText(handle, "HELLO WORLD");
 
 		BuildLinkIndex();
 		List<Node> tree = BuildTree(baseRoot);
@@ -339,9 +341,8 @@ internal static partial class NativeMethods {
 	const int CsVRedraw = 0x0001;
 	const int CwUseDefault = unchecked((int)0x80000000);
 	const int SwShow = 5;
-	const uint WsOverlappedWindow = 0x00CF0000;
-	const uint WsVisible = 0x10000000;
-	static readonly IntPtr IdiApplication = new(32512);
+	const int WsOverlappedWindow = 0x00CF0000;
+	const int WsVisible = 0x10000000;
 
 	static NativeMethods() {
 		wndProc = DispatchWindowMessage;
@@ -354,14 +355,16 @@ internal static partial class NativeMethods {
 		currentWndProc = callback;
 		IntPtr instance = GetModuleHandle(null);
 		string className = "MHTMLViewerNativeWindow";
+		ExtractIconEx(Environment.ProcessPath!, 0, out var large, out var small, 1);
 		var wc = new WndClassEx {
 			cbSize = (uint)Marshal.SizeOf<WndClassEx>(),
 			style = CsHRedraw | CsVRedraw,
 			lpfnWndProc = wndProc,
-			hInstance = instance,
-			hIcon = LoadIcon(IntPtr.Zero, IdiApplication),
+			hIcon = large,
+			hIconSm = small != IntPtr.Zero ? small : large,
 			hCursor = LoadCursor(IntPtr.Zero, new IntPtr(32512)),
-			hbrBackground = IntPtr.Zero,
+			hbrBackground = 1 + 1,
+    		hInstance = instance,
 			lpszClassName = className
 		};
 
@@ -375,14 +378,14 @@ internal static partial class NativeMethods {
 			0,
 			className,
 			title,
-			WsOverlappedWindow | WsVisible,
+			0x10CF0000,
 			CwUseDefault,
 			CwUseDefault,
 			width,
 			height,
 			IntPtr.Zero,
 			IntPtr.Zero,
-			instance,
+			IntPtr.Zero,
 			IntPtr.Zero);
 		if (hwnd == IntPtr.Zero) Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
 		ShowWindow(hwnd, SwShow);
@@ -400,7 +403,6 @@ internal static partial class NativeMethods {
 	static IntPtr DispatchWindowMessage(IntPtr hwnd, uint msg, UIntPtr wParam, IntPtr lParam) {
 		return currentWndProc?.Invoke(hwnd, msg, wParam, lParam) ?? DefWindowProc(hwnd, msg, wParam, lParam);
 	}
-
 	public delegate IntPtr WndProc(IntPtr hwnd, uint msg, UIntPtr wParam, IntPtr lParam);
 
 	[StructLayout(LayoutKind.Sequential)]
@@ -415,7 +417,7 @@ internal static partial class NativeMethods {
 	struct Msg {
 		public IntPtr hwnd;
 		public uint message;
-		public UIntPtr wParam;
+		public IntPtr wParam;
 		public IntPtr lParam;
 		public uint time;
 		public int ptX;
@@ -433,13 +435,16 @@ internal static partial class NativeMethods {
 		public IntPtr hIcon;
 		public IntPtr hCursor;
 		public IntPtr hbrBackground;
-		public string? lpszMenuName;
+		public string lpszMenuName;
 		public string lpszClassName;
 		public IntPtr hIconSm;
 	}
 
-	[DllImport("user32.dll", EntryPoint = "CreateWindowExW", SetLastError = true, CharSet = CharSet.Unicode)]
-	static extern IntPtr CreateWindowEx(uint dwExStyle, string lpClassName, string lpWindowName, uint dwStyle, int x, int y, int nWidth, int nHeight, IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
+	[DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+	static extern uint ExtractIconEx(string lpszFile, int nIconIndex, out IntPtr phiconLarge, out IntPtr phiconSmall, uint nIcons);
+
+	[DllImport("user32.dll")]
+	static extern IntPtr CreateWindowEx(int dwExStyle, string lpClassName, string lpWindowName, int dwStyle, int x, int y, int nWidth, int nHeight, IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
 
 	[DllImport("user32.dll")]
 	static extern IntPtr DispatchMessage(ref Msg lpMsg);
@@ -474,7 +479,7 @@ internal static partial class NativeMethods {
 	[DllImport("user32.dll", EntryPoint = "RegisterClassExW", SetLastError = true, CharSet = CharSet.Unicode)]
 	static extern ushort RegisterClassEx(ref WndClassEx lpWndClass);
 
-	[DllImport("user32.dll", EntryPoint = "SetWindowTextW", CharSet = CharSet.Unicode)]
+	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
 	public static extern int SetWindowText(IntPtr hWnd, string lpString);
 
 	[DllImport("user32.dll")]
