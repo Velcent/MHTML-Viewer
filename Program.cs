@@ -228,7 +228,7 @@ internal sealed class WebViewHost : IDisposable {
 	void BuildLinkIndex() {
 		Parallel.ForEach(
 			Directory.GetFiles(baseRoot, "*.mhtml", SearchOption.AllDirectories),
-			new ParallelOptions { MaxDegreeOfParallelism = 8 },
+			new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
 			IndexContentLocations);
 	}
 
@@ -261,27 +261,45 @@ internal sealed class WebViewHost : IDisposable {
 	}
 
 	List<Node> BuildTree(string root) {
-		var items = new List<Node>();
-		foreach (string dir in Directory.GetDirectories(root).Where(ContainsMhtml)) {
-			List<Node> children = BuildTree(dir);
-			string? twinFile = Directory.GetFiles(root, "*.mhtml").FirstOrDefault(f =>
-				Path.GetFileNameWithoutExtension(f).Equals(Path.GetFileName(dir), StringComparison.OrdinalIgnoreCase));
-			string target = twinFile ?? FindFirstFile(dir);
-			items.Add(new Node {
-				name = Path.GetFileName(dir),
-				path = target,
-				children = children
-			});
-		}
+		var items = new ConcurrentBag<Node>();
 
-		foreach (string file in Directory.GetFiles(root, "*.mhtml")) {
-			IndexContentLocations(file);
-			items.Add(new Node {
-				name = Path.GetFileNameWithoutExtension(file),
-				path = file
-			});
-		}
+		// Proses folder secara paralel
+		Parallel.ForEach(
+			Directory.GetDirectories(root).Where(ContainsMhtml),
+			new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
+			dir => {
+				List<Node> children = BuildTree(dir);
 
+				string? twinFile = Directory.GetFiles(root, "*.mhtml")
+					.FirstOrDefault(f =>
+						Path.GetFileNameWithoutExtension(f)
+							.Equals(Path.GetFileName(dir), StringComparison.OrdinalIgnoreCase));
+
+				string target = twinFile ?? FindFirstFile(dir);
+
+				items.Add(new Node {
+					name = Path.GetFileName(dir),
+					path = target,
+					children = children
+				});
+			}
+		);
+
+		// Proses file secara paralel
+		Parallel.ForEach(
+			Directory.GetFiles(root, "*.mhtml"),
+			new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
+			file => {
+				IndexContentLocations(file);
+
+				items.Add(new Node {
+					name = Path.GetFileNameWithoutExtension(file),
+					path = file
+				});
+			}
+		);
+
+		// Sorting tetap dilakukan setelah semua selesai
 		return items
 			.GroupBy(x => x.name, StringComparer.OrdinalIgnoreCase)
 			.Select(g => g.FirstOrDefault(n => n.children != null) ?? g.First())
