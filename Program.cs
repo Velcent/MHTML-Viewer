@@ -84,7 +84,6 @@ internal sealed class WebViewHost : IDisposable {
 	}
 
 	public async Task InitializeAsync() {
-		UpdateLoadingProgress(0, "Initializing...");
 
 		string tempPath = Path.Combine(Path.GetTempPath(), "MHTMLViewer");
 		var env = await CoreWebView2Environment.CreateAsync(null, tempPath);
