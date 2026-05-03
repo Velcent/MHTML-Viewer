@@ -36,7 +36,8 @@ internal static class Program {
 internal sealed class WebViewHost : IDisposable {
 	const int InitialWidth = 1900;
 	const int InitialHeight = 1000;
-	const int SidebarWidth = 340;
+	const int MinSidebarWidth = 220;
+	const int MaxSidebarWidth = 720;
 
 	readonly string baseRoot = Directory.GetCurrentDirectory();
 	readonly ConcurrentDictionary<string, string> contentLocationMap = new(StringComparer.OrdinalIgnoreCase);
@@ -45,6 +46,7 @@ internal sealed class WebViewHost : IDisposable {
 	CoreWebView2? navWeb;
 	CoreWebView2? viewerWeb;
 	IntPtr handle;
+	int sidebarWidth = 340;
 
 	public IntPtr Handle => handle;
 
@@ -61,7 +63,7 @@ internal sealed class WebViewHost : IDisposable {
 		viewerWeb = viewerController.CoreWebView2;
 		ResizeWebView();
 
-		navWeb.Settings.AreDevToolsEnabled = true;
+		navWeb.Settings.AreDevToolsEnabled = false;
 		viewerWeb.Settings.AreDevToolsEnabled = false;
 		navWeb.SetVirtualHostNameToFolderMapping("app.local", tempPath, CoreWebView2HostResourceAccessKind.Allow);
 		navWeb.WebMessageReceived += WebMessageReceived;
@@ -108,9 +110,9 @@ internal sealed class WebViewHost : IDisposable {
 		NativeMethods.GetClientRect(handle, out var rect);
 		int width = Math.Max(0, rect.Right - rect.Left);
 		int height = Math.Max(0, rect.Bottom - rect.Top);
-		int sidebarWidth = Math.Min(SidebarWidth, width);
-		navController.Bounds = new System.Drawing.Rectangle(0, 0, sidebarWidth, height);
-		viewerController.Bounds = new System.Drawing.Rectangle(sidebarWidth, 0, Math.Max(0, width - sidebarWidth), height);
+		int actualSidebarWidth = Math.Clamp(sidebarWidth, 0, width);
+		navController.Bounds = new System.Drawing.Rectangle(0, 0, actualSidebarWidth, height);
+		viewerController.Bounds = new System.Drawing.Rectangle(actualSidebarWidth, 0, Math.Max(0, width - actualSidebarWidth), height);
 	}
 
 	async void WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e) {
@@ -128,6 +130,10 @@ internal sealed class WebViewHost : IDisposable {
 				if (viewerWeb!.CanGoBack) viewerWeb.GoBack();
 			} else if (type == "forward") {
 				if (viewerWeb!.CanGoForward) viewerWeb.GoForward();
+			} else if (type == "resizeSidebar") {
+				int requestedWidth = msg.RootElement.GetProperty("width").GetInt32();
+				sidebarWidth = Math.Clamp(requestedWidth, MinSidebarWidth, MaxSidebarWidth);
+				ResizeWebView();
 			}
 		} catch (Exception ex) {
 			await ShowErrorAsync(ex.Message);
@@ -136,8 +142,8 @@ internal sealed class WebViewHost : IDisposable {
 
 	async void ViewerNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e) {
 		if (!e.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase)) return;
-		if (!TryResolveMhtml(e.Uri, out string file, out string fragment)) return;
 		e.Cancel = true;
+		if (!TryResolveMhtml(e.Uri, out string file, out string fragment)) return;
 		await OpenMhtmlAsync(file, fragment);
 	}
 

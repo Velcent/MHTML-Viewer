@@ -15,7 +15,7 @@
 			height: 100vh;
 			background: #202124;
 			color: #ddd;
-			font-family: Segoe UI, Arial, sans-serif;
+			font-family: Segoe UI;
 			overflow: hidden;
 		}
 
@@ -25,12 +25,28 @@
 		}
 
 		#sidebar {
+			position: relative;
 			min-width: 0;
 			height: 100vh;
 			display: flex;
 			flex-direction: column;
 			background: #18181c;
 			border-right: 1px solid #34363b;
+		}
+
+		#resizeHandle {
+			position: absolute;
+			top: 0;
+			right: 0;
+			width: 2px;
+			height: 100%;
+			cursor: ew-resize;
+			z-index: 10;
+		}
+
+		#resizeHandle:hover,
+		body.resizing #resizeHandle {
+			background: #39525a;
 		}
 
 		#toolbarRow {
@@ -98,11 +114,10 @@
 
 		.arrow {
 			width: 12px;
-			flex: 0 0 12px;
-			padding-top: 2px;
+			padding-top: 7px;
 			display: inline-block;
 			text-align: center;
-			font-family: Arial, sans-serif;
+			font-family: Arial;
 			font-size: 9px;
 		}
 
@@ -173,13 +188,16 @@
 			</div>
 			<div id="tree"></div>
 			<div id="error"></div>
+			<div id="resizeHandle"></div>
 		</div>
 	</div>
 
 	<script>
 		const tree = document.getElementById("tree");
 		const errorBox = document.getElementById("error");
+		const resizeHandle = document.getElementById("resizeHandle");
 		let allElements = [];
+		let resizing = false;
 
 		function initTree(data, firstPath) {
 			renderTree(data);
@@ -187,6 +205,8 @@
 			restoreScroll();
 			const last = localStorage.getItem("lastFile");
 			const target = last || firstPath;
+			const sidebarWidth = parseInt(localStorage.getItem("sidebarWidth") || "", 10);
+			if (sidebarWidth) resizeSidebar(sidebarWidth);
 			if (target) {
 				const node = findNodeByPath(target);
 				if (node) setActive(node);
@@ -273,6 +293,37 @@
 			errorBox.textContent = "";
 			errorBox.style.display = "none";
 		}
+
+		function resizeSidebar(width) {
+			const nextWidth = Math.max(220, Math.min(720, Math.round(width)));
+			localStorage.setItem("sidebarWidth", nextWidth.toString());
+			sendMessage({ type: "resizeSidebar", width: nextWidth });
+		}
+
+		resizeHandle.addEventListener("pointerdown", e => {
+			resizing = true;
+			document.body.classList.add("resizing");
+			resizeHandle.setPointerCapture(e.pointerId);
+			e.preventDefault();
+		});
+
+		resizeHandle.addEventListener("pointermove", e => {
+			if (!resizing) return;
+			resizeSidebar(e.clientX);
+			e.preventDefault();
+		});
+
+		resizeHandle.addEventListener("pointerup", e => {
+			resizing = false;
+			document.body.classList.remove("resizing");
+			resizeHandle.releasePointerCapture(e.pointerId);
+			e.preventDefault();
+		});
+
+		resizeHandle.addEventListener("pointercancel", () => {
+			resizing = false;
+			document.body.classList.remove("resizing");
+		});
 
 		function setActive(el) {
 			document.querySelectorAll(".item").forEach(i => i.classList.remove("active"));
