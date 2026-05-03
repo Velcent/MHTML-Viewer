@@ -5,11 +5,12 @@
 		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
 		<TargetFramework>net10.0-windows</TargetFramework>
 		<Nullable>enable</Nullable>
-		<UseWindowsForms>true</UseWindowsForms>
-		<UseWPF>false</UseWPF>
 		<ImplicitUsings>enable</ImplicitUsings>
-		<!-- <PublishTrimmed>true</PublishTrimmed> -->
-		<!-- <TrimMode>link</TrimMode> -->
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+		<NoWarn>$(NoWarn);IL2026;IL2104</NoWarn>
+		<PublishTrimmed>true</PublishTrimmed>
+		<TrimMode>partial</TrimMode>
 		<PublishSingleFile>true</PublishSingleFile>
 		<SelfContained>true</SelfContained>
 		<PublishReadyToRun>false</PublishReadyToRun>
@@ -27,11 +28,13 @@
 	<ItemGroup>
 		<PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3912.50" />
 		<EmbeddedResource Include="ui.html" />
+		<TrimmerRootAssembly Include="Microsoft.Web.WebView2.Core" />
 	</ItemGroup>
 
 	<Target Name="RemoveUnusedWebView2WpfReference" BeforeTargets="ResolveAssemblyReferences">
 		<ItemGroup>
 			<Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+			<Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.WinForms'" />
 		</ItemGroup>
 	</Target>
 
@@ -42,6 +45,7 @@
 					'%(ResolvedFileToPublish.Filename)%(ResolvedFileToPublish.Extension)' == 'System.Windows.Forms.Design.dll' Or
 					'%(ResolvedFileToPublish.Filename)%(ResolvedFileToPublish.Extension)' == 'Microsoft.DiaSymReader.Native.amd64.dll' Or
 					'%(ResolvedFileToPublish.Filename)%(ResolvedFileToPublish.Extension)' == 'mscordbi.dll' Or
+					'%(ResolvedFileToPublish.Extension)' == '.xml' Or
 					$([System.String]::Copy('%(ResolvedFileToPublish.Filename)').StartsWith('mscordaccore'))" />
 		</ItemGroup>
 	</Target>
