@@ -84,10 +84,18 @@ internal sealed class WebViewHost : IDisposable {
 	}
 
 	public async Task InitializeAsync() {
+		UpdateLoadingProgress(0, "Initializing...");
+
 		string tempPath = Path.Combine(Path.GetTempPath(), "MHTMLViewer");
 		var env = await CoreWebView2Environment.CreateAsync(null, tempPath);
+		UpdateLoadingProgress(10, "Creating WebView environment...");
+
 		navController = await env.CreateCoreWebView2ControllerAsync(handle);
+		UpdateLoadingProgress(30, "Creating navigation controller...");
+
 		viewerController = await env.CreateCoreWebView2ControllerAsync(handle);
+		UpdateLoadingProgress(50, "Creating viewer controller...");
+
 		navWeb = navController.CoreWebView2;
 		viewerWeb = viewerController.CoreWebView2;
 		ResizeWebView();
@@ -102,11 +110,15 @@ internal sealed class WebViewHost : IDisposable {
 		string first = FindFirstFile(baseRoot);
 		if (string.IsNullOrEmpty(first)) return;
 
+		UpdateLoadingProgress(60, "Building link index...");
 		BuildLinkIndex();
+
+		UpdateLoadingProgress(80, "Building file tree...");
 		List<Node> tree = BuildTree(baseRoot);
 		string treeJson = JsonSerializer.Serialize(tree, AppJsonContext.Default.ListNode);
 		string firstJson = JsonSerializer.Serialize(first, AppJsonContext.Default.String);
 
+		UpdateLoadingProgress(90, "Loading UI...");
 		string uiPath = Path.Combine(tempPath, "ui.html");
 		File.WriteAllText(uiPath, LoadUiHtml());
 
@@ -114,8 +126,14 @@ internal sealed class WebViewHost : IDisposable {
 			await navWeb.ExecuteScriptAsync($"initTree({treeJson}, {firstJson});");
 		};
 		navWeb.Navigate("https://app.local/ui.html");
-		
+
 		NativeMethods.SetWindowText(handle, Path.GetFileNameWithoutExtension(first));
+	}
+
+	void UpdateLoadingProgress(int percent, string status) {
+		string bar = new string('█', percent / 5);
+		string empty = new string(' ', 20 - percent / 5);
+		NativeMethods.SetWindowText(handle, $"Loading [{bar}{empty}] {percent}% - {status}");
 	}
 
 	IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam) {
