@@ -51,10 +51,36 @@ internal sealed class WebViewHost : IDisposable {
 	int sidebarWidth = 340;
 	bool sidebarCollapsed;
 
+	// IMPORTANT: prevent GC
+	WndProcDelegate? wndProcDelegate;
+
 	public IntPtr Handle => handle;
 
 	public void Create() {
-		handle = NativeMethods.CreateMainWindow("MHTML Viewer by Velcent", InitialWidth, InitialHeight, WndProc);
+		wndProcDelegate = WndProc;
+		NativeMethods.ExtractIconEx(Environment.ProcessPath!, 0, out var large, out var small, 1);
+        var wc = new WNDCLASS
+        {
+            lpfnWndProc = Marshal.GetFunctionPointerForDelegate(wndProcDelegate),
+            lpszClassName = "MHTMLViewerWindow",
+            hInstance = NativeMethods.GetModuleHandle(null),
+            hIcon = large,
+			// hIconSm = small != IntPtr.Zero ? small : large,
+			hbrBackground = 1 + 1
+        };
+
+        NativeMethods.RegisterClass(ref wc);
+		handle = NativeMethods.CreateWindowEx(
+			0,
+			wc.lpszClassName,
+			"MHTML Viewer by Velcent",
+			0x10CF0000,
+			100, 100, InitialWidth, InitialHeight,
+			IntPtr.Zero,
+			IntPtr.Zero,
+			wc.hInstance,
+			IntPtr.Zero
+		);
 	}
 
 	public async Task InitializeAsync() {
@@ -74,10 +100,7 @@ internal sealed class WebViewHost : IDisposable {
 		viewerWeb.NavigationCompleted += ViewerNavigationCompleted;
 
 		string first = FindFirstFile(baseRoot);
-		if (!string.IsNullOrEmpty(first)) {
-			NativeMethods.SetWindowText(handle, Path.GetFileNameWithoutExtension(first));
-		}
-		NativeMethods.SetWindowText(handle, "HELLO WORLD");
+		if (string.IsNullOrEmpty(first)) return;
 
 		BuildLinkIndex();
 		List<Node> tree = BuildTree(baseRoot);
@@ -91,21 +114,20 @@ internal sealed class WebViewHost : IDisposable {
 			await navWeb.ExecuteScriptAsync($"initTree({treeJson}, {firstJson});");
 		};
 		navWeb.Navigate("https://app.local/ui.html");
+		
+		NativeMethods.SetWindowText(handle, Path.GetFileNameWithoutExtension(first));
 	}
 
-	IntPtr WndProc(IntPtr hwnd, uint msg, UIntPtr wParam, IntPtr lParam) {
+	IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam) {
 		switch (msg) {
-			case NativeMethods.WmSize:
+			case 0x0005: // WM_SIZE
 				ResizeWebView();
 				return IntPtr.Zero;
-			case NativeMethods.WmAppDispatch:
-				WindowSynchronizationContext.DispatchQueuedCallbacks();
-				return IntPtr.Zero;
-			case NativeMethods.WmDestroy:
+			case 0x0002: // WM_DESTROY
 				NativeMethods.PostQuitMessage(0);
 				return IntPtr.Zero;
 			default:
-				return NativeMethods.DefWindowProc(hwnd, msg, wParam, lParam);
+				return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
 		}
 	}
 
@@ -322,7 +344,7 @@ internal sealed class WindowSynchronizationContext : SynchronizationContext {
 
 	public override void Post(SendOrPostCallback d, object? state) {
 		Queue.Enqueue((d, state));
-		NativeMethods.PostMessage(hwnd, NativeMethods.WmAppDispatch, UIntPtr.Zero, IntPtr.Zero);
+		NativeMethods.PostMessage(hwnd, 0x8001, UIntPtr.Zero, IntPtr.Zero);
 	}
 
 	public static void DispatchQueuedCallbacks() {
@@ -332,66 +354,77 @@ internal sealed class WindowSynchronizationContext : SynchronizationContext {
 	}
 }
 
+struct WNDCLASS {
+	public int style;
+	public IntPtr lpfnWndProc;
+	public int cbClsExtra;
+	public int cbWndExtra;
+	public IntPtr hInstance;
+	public IntPtr hIcon;
+	public IntPtr hIconSm;
+	public IntPtr hbrBackground;
+	public string lpszMenuName;
+	public string lpszClassName;
+}
+
+struct MSG {
+	public IntPtr hwnd;
+	public uint message;
+	public IntPtr wParam;
+	public IntPtr lParam;
+	public uint time;
+	public int pt_x;
+	public int pt_y;
+}
+
+delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
 internal static partial class NativeMethods {
-	public const uint WmDestroy = 0x0002;
-	public const uint WmSize = 0x0005;
-	public const uint WmAppDispatch = 0x8001;
 
-	const int CsHRedraw = 0x0002;
-	const int CsVRedraw = 0x0001;
-	const int CwUseDefault = unchecked((int)0x80000000);
-	const int SwShow = 5;
-	const int WsOverlappedWindow = 0x00CF0000;
-	const int WsVisible = 0x10000000;
+	[DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+	public static extern uint ExtractIconEx(string lpszFile, int nIconIndex, out IntPtr phiconLarge, out IntPtr phiconSmall, uint nIcons);
 
-	static NativeMethods() {
-		wndProc = DispatchWindowMessage;
-	}
+	[DllImport("kernel32.dll")]
+	public static extern IntPtr GetModuleHandle(string? lpModuleName);
 
-	static readonly WndProc wndProc;
-	static WndProc? currentWndProc;
+	[DllImport("user32.dll")]
+	public static extern ushort RegisterClass(ref WNDCLASS lpWndClass);
 
-	public static IntPtr CreateMainWindow(string title, int width, int height, WndProc callback) {
-		currentWndProc = callback;
-		IntPtr instance = GetModuleHandle(null);
-		string className = "MHTMLViewerNativeWindow";
-		ExtractIconEx(Environment.ProcessPath!, 0, out var large, out var small, 1);
-		var wc = new WndClassEx {
-			cbSize = (uint)Marshal.SizeOf<WndClassEx>(),
-			style = CsHRedraw | CsVRedraw,
-			lpfnWndProc = wndProc,
-			hIcon = large,
-			hIconSm = small != IntPtr.Zero ? small : large,
-			hCursor = LoadCursor(IntPtr.Zero, new IntPtr(32512)),
-			hbrBackground = 1 + 1,
-    		hInstance = instance,
-			lpszClassName = className
-		};
+	[DllImport("user32.dll")]
+	public static extern IntPtr CreateWindowEx(
+		int exStyle,
+		string className,
+		string windowName,
+		int style,
+		int x, int y, int width, int height,
+		IntPtr parent,
+		IntPtr menu,
+		IntPtr instance,
+		IntPtr param);
 
-		ushort atom = RegisterClassEx(ref wc);
-		if (atom == 0) {
-			int error = Marshal.GetLastWin32Error();
-			if (error != 1410) Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
-		}
+	[DllImport("user32.dll")]
+	public static extern int GetMessage(out MSG msg, IntPtr hwnd, uint min, uint max);
 
-		IntPtr hwnd = CreateWindowEx(
-			0,
-			className,
-			title,
-			0x10CF0000,
-			CwUseDefault,
-			CwUseDefault,
-			width,
-			height,
-			IntPtr.Zero,
-			IntPtr.Zero,
-			IntPtr.Zero,
-			IntPtr.Zero);
-		if (hwnd == IntPtr.Zero) Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
-		ShowWindow(hwnd, SwShow);
-		UpdateWindow(hwnd);
-		return hwnd;
-	}
+	[DllImport("user32.dll")]
+	public static extern IntPtr DispatchMessage(ref MSG msg);
+
+	[DllImport("user32.dll")]
+	public static extern bool TranslateMessage(ref MSG msg);
+
+	[DllImport("user32.dll")]
+	public static extern IntPtr DefWindowProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+	[DllImport("user32.dll")]
+	public static extern void PostQuitMessage(int code);
+
+	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+	public static extern bool SetWindowText(IntPtr hWnd, string text);
+
+	[DllImport("user32.dll", SetLastError = true)]
+	public static extern int GetClientRect(IntPtr hWnd, out Rect lpRect);
+
+	[DllImport("user32.dll", SetLastError = true)]
+	public static extern int PostMessage(IntPtr hWnd, uint msg, UIntPtr wParam, IntPtr lParam);
 
 	public static void RunMessageLoop() {
 		while (GetMessage(out var msg, IntPtr.Zero, 0, 0) > 0) {
@@ -400,10 +433,12 @@ internal static partial class NativeMethods {
 		}
 	}
 
-	static IntPtr DispatchWindowMessage(IntPtr hwnd, uint msg, UIntPtr wParam, IntPtr lParam) {
-		return currentWndProc?.Invoke(hwnd, msg, wParam, lParam) ?? DefWindowProc(hwnd, msg, wParam, lParam);
+	public static void ShowMessage(IntPtr owner, string text, string caption) {
+		MessageBox(owner, text, caption, 0x00000010);
 	}
-	public delegate IntPtr WndProc(IntPtr hwnd, uint msg, UIntPtr wParam, IntPtr lParam);
+
+	[DllImport("user32.dll", EntryPoint = "MessageBoxW", CharSet = CharSet.Unicode)]
+	static extern int MessageBox(IntPtr hWnd, string lpText, string lpCaption, uint uType);
 
 	[StructLayout(LayoutKind.Sequential)]
 	public struct Rect {
@@ -411,87 +446,5 @@ internal static partial class NativeMethods {
 		public int Top;
 		public int Right;
 		public int Bottom;
-	}
-
-	[StructLayout(LayoutKind.Sequential)]
-	struct Msg {
-		public IntPtr hwnd;
-		public uint message;
-		public IntPtr wParam;
-		public IntPtr lParam;
-		public uint time;
-		public int ptX;
-		public int ptY;
-	}
-
-	[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-	struct WndClassEx {
-		public uint cbSize;
-		public int style;
-		public WndProc lpfnWndProc;
-		public int cbClsExtra;
-		public int cbWndExtra;
-		public IntPtr hInstance;
-		public IntPtr hIcon;
-		public IntPtr hCursor;
-		public IntPtr hbrBackground;
-		public string lpszMenuName;
-		public string lpszClassName;
-		public IntPtr hIconSm;
-	}
-
-	[DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-	static extern uint ExtractIconEx(string lpszFile, int nIconIndex, out IntPtr phiconLarge, out IntPtr phiconSmall, uint nIcons);
-
-	[DllImport("user32.dll")]
-	static extern IntPtr CreateWindowEx(int dwExStyle, string lpClassName, string lpWindowName, int dwStyle, int x, int y, int nWidth, int nHeight, IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
-
-	[DllImport("user32.dll")]
-	static extern IntPtr DispatchMessage(ref Msg lpMsg);
-
-	[DllImport("user32.dll")]
-	public static extern IntPtr DefWindowProc(IntPtr hWnd, uint msg, UIntPtr wParam, IntPtr lParam);
-
-	[DllImport("user32.dll")]
-	static extern int GetMessage(out Msg lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
-
-	[DllImport("kernel32.dll", EntryPoint = "GetModuleHandleW", SetLastError = true, CharSet = CharSet.Unicode)]
-	static extern IntPtr GetModuleHandle(string? lpModuleName);
-
-	[DllImport("user32.dll", SetLastError = true)]
-	public static extern int GetClientRect(IntPtr hWnd, out Rect lpRect);
-
-	[DllImport("user32.dll")]
-	static extern IntPtr LoadCursor(IntPtr hInstance, IntPtr lpCursorName);
-
-	[DllImport("user32.dll")]
-	static extern IntPtr LoadIcon(IntPtr hInstance, IntPtr lpIconName);
-
-	[DllImport("user32.dll", EntryPoint = "MessageBoxW", CharSet = CharSet.Unicode)]
-	static extern int MessageBox(IntPtr hWnd, string lpText, string lpCaption, uint uType);
-
-	[DllImport("user32.dll")]
-	public static extern void PostQuitMessage(int nExitCode);
-
-	[DllImport("user32.dll", SetLastError = true)]
-	public static extern int PostMessage(IntPtr hWnd, uint msg, UIntPtr wParam, IntPtr lParam);
-
-	[DllImport("user32.dll", EntryPoint = "RegisterClassExW", SetLastError = true, CharSet = CharSet.Unicode)]
-	static extern ushort RegisterClassEx(ref WndClassEx lpWndClass);
-
-	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
-	public static extern int SetWindowText(IntPtr hWnd, string lpString);
-
-	[DllImport("user32.dll")]
-	static extern int ShowWindow(IntPtr hWnd, int nCmdShow);
-
-	[DllImport("user32.dll")]
-	static extern int TranslateMessage(ref Msg lpMsg);
-
-	[DllImport("user32.dll")]
-	static extern int UpdateWindow(IntPtr hWnd);
-
-	public static void ShowMessage(IntPtr owner, string text, string caption) {
-		MessageBox(owner, text, caption, 0x00000010);
 	}
 }
