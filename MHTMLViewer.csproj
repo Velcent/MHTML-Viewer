@@ -15,11 +15,11 @@
 		<PublishReadyToRun>false</PublishReadyToRun>
 		<EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
 		<IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-		<IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
 		<DebugType>none</DebugType>
 		<DebugSymbols>false</DebugSymbols>
 		<DebuggerSupport>false</DebuggerSupport>
 		<InvariantGlobalization>true</InvariantGlobalization>
+		<SatelliteResourceLanguages>en</SatelliteResourceLanguages>
 
 		<ApplicationIcon>icon/UE.ico</ApplicationIcon>
 	</PropertyGroup>
@@ -28,5 +28,22 @@
 		<PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3912.50" />
 		<EmbeddedResource Include="ui.html" />
 	</ItemGroup>
+
+	<Target Name="RemoveUnusedWebView2WpfReference" BeforeTargets="ResolveAssemblyReferences">
+		<ItemGroup>
+			<Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+		</ItemGroup>
+	</Target>
+
+	<Target Name="RemoveUnusedSelfContainedPublishFiles" BeforeTargets="_ComputeFilesToBundle;_ComputeResolvedFilesToPublishTypes">
+		<ItemGroup>
+			<ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+				Condition="
+					'%(ResolvedFileToPublish.Filename)%(ResolvedFileToPublish.Extension)' == 'System.Windows.Forms.Design.dll' Or
+					'%(ResolvedFileToPublish.Filename)%(ResolvedFileToPublish.Extension)' == 'Microsoft.DiaSymReader.Native.amd64.dll' Or
+					'%(ResolvedFileToPublish.Filename)%(ResolvedFileToPublish.Extension)' == 'mscordbi.dll' Or
+					$([System.String]::Copy('%(ResolvedFileToPublish.Filename)').StartsWith('mscordaccore'))" />
+		</ItemGroup>
+	</Target>
 
 </Project>
