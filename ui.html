@@ -53,7 +53,7 @@
 			display: flex;
 			align-items: center;
 			gap: 8px;
-			padding: 10px;
+			padding: 10px 14px 10px 8px;
 			flex: 0 0 auto;
 		}
 
@@ -154,6 +154,44 @@
 			background: #343a45;
 		}
 
+		#btnToggleSidebar {
+			position: absolute;
+			top: 50%;
+			right: 5px;
+			transform: translateY(-50%);
+			width: 28px;
+			height: 56px;
+			border: 1px solid #3d4148;
+			border-right-color: #4a5058;
+			border-radius: 8px;
+			background: #24272d;
+			color: #d7dbe2;
+			cursor: pointer;
+			z-index: 20;
+			box-shadow: 0 8px 18px rgba(0, 0, 0, .24);
+		}
+
+		#btnToggleSidebar:hover {
+			background: #303640;
+			border-color: #59616c;
+		}
+
+		body.collapsed #search,
+		body.collapsed #btnBack,
+		body.collapsed #btnForward,
+		body.collapsed #toolbarRow,
+		body.collapsed #tree,
+		body.collapsed #error,
+		body.collapsed #resizeHandle {
+			display: none;
+		}
+
+		body.collapsed #btnToggleSidebar {
+			right: 8px;
+			width: 28px;
+			height: 64px;
+		}
+
 		::-webkit-scrollbar {
 			width: 10px;
 			height: 10px;
@@ -181,6 +219,7 @@
 <body>
 	<div id="app">
 		<div id="sidebar">
+			<button id="btnToggleSidebar" onclick="toggleSidebar()" title="Toggle sidebar">&lt;</button>
 			<div id="toolbarRow">
 				<button id="btnBack" onclick="goBack()">&lt;</button>
 				<input id="search" placeholder="Search...">
@@ -196,8 +235,10 @@
 		const tree = document.getElementById("tree");
 		const errorBox = document.getElementById("error");
 		const resizeHandle = document.getElementById("resizeHandle");
+		const btnToggleSidebar = document.getElementById("btnToggleSidebar");
 		let allElements = [];
 		let resizing = false;
+		let collapsed = false;
 
 		function initTree(data, firstPath) {
 			renderTree(data);
@@ -206,7 +247,12 @@
 			const last = localStorage.getItem("lastFile");
 			const target = last || firstPath;
 			const sidebarWidth = parseInt(localStorage.getItem("sidebarWidth") || "", 10);
-			if (sidebarWidth) resizeSidebar(sidebarWidth);
+			collapsed = localStorage.getItem("sidebarCollapsed") === "true";
+			if (collapsed) {
+				setSidebarCollapsed(true);
+			} else if (sidebarWidth) {
+				resizeSidebar(sidebarWidth);
+			}
 			if (target) {
 				const node = findNodeByPath(target);
 				if (node) setActive(node);
@@ -297,10 +343,32 @@
 		function resizeSidebar(width) {
 			const nextWidth = Math.max(220, Math.min(720, Math.round(width)));
 			localStorage.setItem("sidebarWidth", nextWidth.toString());
+			localStorage.setItem("sidebarCollapsed", "false");
+			collapsed = false;
+			document.body.classList.remove("collapsed");
+			btnToggleSidebar.textContent = "<";
 			sendMessage({ type: "resizeSidebar", width: nextWidth });
 		}
 
+		function toggleSidebar() {
+			setSidebarCollapsed(!collapsed);
+		}
+
+		function setSidebarCollapsed(nextCollapsed) {
+			collapsed = nextCollapsed;
+			localStorage.setItem("sidebarCollapsed", collapsed ? "true" : "false");
+			document.body.classList.toggle("collapsed", collapsed);
+			btnToggleSidebar.textContent = collapsed ? ">" : "<";
+			const width = parseInt(localStorage.getItem("sidebarWidth") || "340", 10);
+			sendMessage({
+				type: "collapseSidebar",
+				collapsed: collapsed,
+				width: Math.max(220, Math.min(720, width))
+			});
+		}
+
 		resizeHandle.addEventListener("pointerdown", e => {
+			if (collapsed) return;
 			resizing = true;
 			document.body.classList.add("resizing");
 			resizeHandle.setPointerCapture(e.pointerId);
@@ -308,7 +376,7 @@
 		});
 
 		resizeHandle.addEventListener("pointermove", e => {
-			if (!resizing) return;
+			if (!resizing || collapsed) return;
 			resizeSidebar(e.clientX);
 			e.preventDefault();
 		});

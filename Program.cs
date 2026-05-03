@@ -36,6 +36,7 @@ internal static class Program {
 internal sealed class WebViewHost : IDisposable {
 	const int InitialWidth = 1900;
 	const int InitialHeight = 1000;
+	const int CollapsedSidebarWidth = 44;
 	const int MinSidebarWidth = 220;
 	const int MaxSidebarWidth = 720;
 
@@ -47,6 +48,7 @@ internal sealed class WebViewHost : IDisposable {
 	CoreWebView2? viewerWeb;
 	IntPtr handle;
 	int sidebarWidth = 340;
+	bool sidebarCollapsed;
 
 	public IntPtr Handle => handle;
 
@@ -110,7 +112,8 @@ internal sealed class WebViewHost : IDisposable {
 		NativeMethods.GetClientRect(handle, out var rect);
 		int width = Math.Max(0, rect.Right - rect.Left);
 		int height = Math.Max(0, rect.Bottom - rect.Top);
-		int actualSidebarWidth = Math.Clamp(sidebarWidth, 0, width);
+		int requestedSidebarWidth = sidebarCollapsed ? CollapsedSidebarWidth : sidebarWidth;
+		int actualSidebarWidth = Math.Clamp(requestedSidebarWidth, 0, width);
 		navController.Bounds = new System.Drawing.Rectangle(0, 0, actualSidebarWidth, height);
 		viewerController.Bounds = new System.Drawing.Rectangle(actualSidebarWidth, 0, Math.Max(0, width - actualSidebarWidth), height);
 	}
@@ -133,6 +136,13 @@ internal sealed class WebViewHost : IDisposable {
 			} else if (type == "resizeSidebar") {
 				int requestedWidth = msg.RootElement.GetProperty("width").GetInt32();
 				sidebarWidth = Math.Clamp(requestedWidth, MinSidebarWidth, MaxSidebarWidth);
+				sidebarCollapsed = false;
+				ResizeWebView();
+			} else if (type == "collapseSidebar") {
+				sidebarCollapsed = msg.RootElement.GetProperty("collapsed").GetBoolean();
+				if (msg.RootElement.TryGetProperty("width", out var widthProperty)) {
+					sidebarWidth = Math.Clamp(widthProperty.GetInt32(), MinSidebarWidth, MaxSidebarWidth);
+				}
 				ResizeWebView();
 			}
 		} catch (Exception ex) {
