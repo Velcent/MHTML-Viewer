@@ -6,7 +6,7 @@
         #sidebarHandle {
             position: fixed;
             top: 0;
-            left: 0;
+            left: -2px;
             width: 2px;
             height: 100%;
             cursor: ew-resize;
@@ -21,7 +21,7 @@
         #sidebarHandle a {
             position: absolute;
             top: 50%;
-            left: 4px;
+            left: 12px;
             transform: translateY(-50%);
             width: 28px;
             height: 56px;

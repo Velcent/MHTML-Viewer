@@ -40,7 +40,7 @@ internal sealed class WebViewHost : IDisposable {
 	const int InitialHeight = 1000;
 	const int MinSidebarWidth = 220;
 	const int MaxSidebarWidth = 720;
-	const int TitleBarHeight = 40;
+	const int TitleBarHeight = 35;
 	const int ResizeBorder = 2;
 
 	const string AppTitle = "MHTML Viewer by Velcent";
@@ -64,14 +64,14 @@ internal sealed class WebViewHost : IDisposable {
 	bool sidebarCollapsed;
 
 	// IMPORTANT: prevent GC
-	WndProcDelegate? wndProcDelegate;
+	Native.WndProcDelegate? wndProcDelegate;
 
 	public IntPtr Handle => handle;
 
 	public void Create() {
 		wndProcDelegate = WndProc;
 		Native.ExtractIconEx(Environment.ProcessPath!, 0, out var large, out var small, 1);
-        var wc = new WNDCLASS {
+        var wc = new Native.WNDCLASS {
             lpfnWndProc = Marshal.GetFunctionPointerForDelegate(wndProcDelegate),
             lpszClassName = "MHTMLViewerWindow",
             hInstance = Native.GetModuleHandle(null),
@@ -119,6 +119,9 @@ internal sealed class WebViewHost : IDisposable {
 		navWeb.Settings.AreDevToolsEnabled = false;
 		viewerWeb.Settings.AreDevToolsEnabled = false;
 		titleWeb.Settings.AreDevToolsEnabled = false;
+		navWeb.Settings.AreDefaultContextMenusEnabled = false;
+		viewerWeb.Settings.AreDefaultContextMenusEnabled = true;
+		titleWeb.Settings.AreDefaultContextMenusEnabled = false;
 		navWeb.SetVirtualHostNameToFolderMapping("app.local", tempPath, CoreWebView2HostResourceAccessKind.Allow);
 		titleWeb.SetVirtualHostNameToFolderMapping("app.local", tempPath, CoreWebView2HostResourceAccessKind.Allow);
 
@@ -138,16 +141,17 @@ internal sealed class WebViewHost : IDisposable {
 		titleWeb.Navigate("https://app.local/" + TitleBarRes);
 		await SetIcon("https://app.local/" + IconRes);
 
-		await UpdateLoadingProgress(50, "Building link index...");
+		await ShowLoading(50, "Building link index...");
 		BuildLinkIndex();
 
-		await UpdateLoadingProgress(80, "Building file tree...");
+		await ShowLoading(80, "Building file tree...");
 		List<Node> tree = BuildTree(baseRoot);
 		string treeJson = JsonSerializer.Serialize(tree, AppJsonContext.Default.ListNode);
 		string firstJson = JsonSerializer.Serialize(first, AppJsonContext.Default.String);
 
 		navWeb.NavigationCompleted += async (_, _) => {
 			await navWeb.ExecuteScriptAsync($"initTree({treeJson}, {firstJson});");
+			await HideLoading();
 			await SetTitle(Path.GetFileNameWithoutExtension(first));
 		};
 		navWeb.Navigate("https://app.local/" + SidebarRes);
@@ -160,10 +164,11 @@ internal sealed class WebViewHost : IDisposable {
 		string url = new Uri(path).AbsoluteUri;
 		await titleWeb!.ExecuteScriptAsync($"setIcon('{url}')");
 	}
-	async Task UpdateLoadingProgress(int percent, string status) {
-		string bar = new string('█', percent / 5);
-		string empty = new string(' ', 20 - percent / 5);
-		await SetTitle($"Loading [{bar}{empty}] {percent}% - {status}");
+	async Task ShowLoading(int percent, string status) {
+		await titleWeb!.ExecuteScriptAsync($"showLoading('Loading {percent}% - {status}')");
+	}
+	async Task HideLoading() {
+		await titleWeb!.ExecuteScriptAsync($"hideLoading()");
 	}
 	async Task InjectToggleButton() {
 		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(ToggleSidebarRes));
@@ -178,37 +183,35 @@ internal sealed class WebViewHost : IDisposable {
 	IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam) {
 		switch (msg) {
 			case Native.WM_NCHITTEST:
-				const int resizeBorder = ResizeBorder + 5; // area resize 1px di pinggir window
+				const int resizeBorder = ResizeBorder + 2;
 
-				Native.GetWindowRect(hWnd, out var winRect);
+				Native.GetWindowRect(hWnd, out var r);
 
 				int x = (short)(lParam.ToInt32() & 0xFFFF);
 				int y = (short)((lParam.ToInt32() >> 16) & 0xFFFF);
 
-				int left = winRect.Left;
-				int top = winRect.Top;
-				int right = winRect.Right;
-				int bottom = winRect.Bottom;
+				bool onLeft   = x >= r.Left && x < r.Left + resizeBorder;
+				bool onRight  = x <= r.Right && x > r.Right - resizeBorder;
+				bool onTop    = y >= r.Top && y < r.Top + resizeBorder;
+				bool onBottom = y <= r.Bottom && y > r.Bottom - resizeBorder;
 
-				bool onLeft = x >= left && x < left + resizeBorder;
-				bool onRight = x <= right && x > right - resizeBorder;
-				bool onTop = y >= top && y < top + resizeBorder;
-				bool onBottom = y <= bottom && y > bottom - resizeBorder;
-
+				// Corner dulu
 				if (onTop && onLeft) return Native.HTTOPLEFT;
 				if (onTop && onRight) return Native.HTTOPRIGHT;
 				if (onBottom && onLeft) return Native.HTBOTTOMLEFT;
 				if (onBottom && onRight) return Native.HTBOTTOMRIGHT;
 
+				// Edge
 				if (onLeft) return Native.HTLEFT;
 				if (onRight) return Native.HTRIGHT;
 				if (onTop) return Native.HTTOP;
 				if (onBottom) return Native.HTBOTTOM;
 
-				return Native.DefWindowProc(hWnd, msg, wParam, lParam);
+				// Client
+				return Native.HTCLIENT;
 			case Native.WM_NCCALCSIZE:
 				if (wParam != IntPtr.Zero) {
-					var p = Marshal.PtrToStructure<NCCALCSIZE_PARAMS>(lParam);
+					var p = Marshal.PtrToStructure<Native.NCCALCSIZE_PARAMS>(lParam);
 					p.rgrc0.Top += 1;
 					Marshal.StructureToPtr(p, lParam, false);
 					return IntPtr.Zero;
@@ -232,26 +235,28 @@ internal sealed class WebViewHost : IDisposable {
 		Native.GetClientRect(handle, out var rect);
 		int width = Math.Max(0, rect.Right - rect.Left);
 		int height = Math.Max(0, rect.Bottom - rect.Top);
-
 		int contentHeight = height - TitleBarHeight;
 		int sidebarW = sidebarCollapsed ? 0 : sidebarWidth;
-
+		bool isMax = Native.IsZoomed(handle);
+		int border = isMax ? ResizeBorder + 5 : ResizeBorder;
 		// TitleBar
 		titleController.Bounds = new System.Drawing.Rectangle(
-			ResizeBorder, 0, width - (ResizeBorder * 2), TitleBarHeight
+			border,
+			isMax ? border : 0,
+			width - (border*2),
+			TitleBarHeight
 		);
-
 		// Sidebar
 		navController.Bounds = new System.Drawing.Rectangle(
-			ResizeBorder, TitleBarHeight, sidebarW - ResizeBorder, contentHeight - ResizeBorder
+			border,
+			isMax ? TitleBarHeight + border : TitleBarHeight,
+			sidebarW, contentHeight - border
 		);
-
 		// Viewer
 		viewerController.Bounds = new System.Drawing.Rectangle(
-			sidebarW + ResizeBorder,
-			TitleBarHeight,
-			width - sidebarW - (ResizeBorder * 2),
-			contentHeight - ResizeBorder
+			sidebarW + border,
+			isMax ? TitleBarHeight + border : TitleBarHeight,
+			width - sidebarW - (border*2), contentHeight - border
 		);
 	}
 	async Task UpdateMaximizeState() {
@@ -268,7 +273,6 @@ internal sealed class WebViewHost : IDisposable {
 					Native.ShowWindow(handle, Native.SW_RESTORE);
 				else
 					Native.ShowWindow(handle, Native.SW_MAXIMIZE);
-
 				await UpdateMaximizeState();
 				break;
 			case "drag":
@@ -323,7 +327,6 @@ internal sealed class WebViewHost : IDisposable {
 		}
 		e.Cancel = true;
 		if (!TryResolveMhtml(e.Uri, out string file, out string fragment)) return;
-		await navWeb!.ExecuteScriptAsync("showLoading()");
 		await OpenMhtml(file, fragment);
 	}
 
@@ -589,42 +592,8 @@ internal sealed class WindowSynchronizationContext : SynchronizationContext {
 		}
 	}
 }
-
-struct WNDCLASS {
-	public int style;
-	public IntPtr lpfnWndProc;
-	public int cbClsExtra;
-	public int cbWndExtra;
-	public IntPtr hInstance;
-	public IntPtr hIcon;
-	public IntPtr hIconSm;
-	public IntPtr hbrBackground;
-	public string lpszMenuName;
-	public string lpszClassName;
-}
-
-struct MSG {
-	public IntPtr hwnd;
-	public uint message;
-	public IntPtr wParam;
-	public IntPtr lParam;
-	public uint time;
-	public int pt_x;
-	public int pt_y;
-}
-
-[StructLayout(LayoutKind.Sequential)]
-struct NCCALCSIZE_PARAMS
-{
-    public Native.Rect rgrc0;
-    public Native.Rect rgrc1;
-    public Native.Rect rgrc2;
-    public IntPtr lppos;
-}
-
-delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
-
 internal static partial class Native {
+	public const int HTCLIENT = 1;
 	public const uint SWP_NOSIZE = 0x0001;
 	public const uint SWP_NOMOVE = 0x0002;
 	public const uint SWP_FRAMECHANGED = 0x0020;
@@ -639,7 +608,8 @@ internal static partial class Native {
 	public const int WS_OVERLAPPEDWINDOW = 0x00CF0000;
 	public const int WS_POPUP = unchecked((int)0x80000000);
 	public const int WS_VISIBLE = 0x10000000;
-	public const int WM_NCLBUTTONDOWN = 0xA1;
+	public const int WM_NCLBUTTONDOWN = 0x00A1;
+	public const int WM_NCLBUTTONDBLCLK = 0x00A3;
 	public const int HTCAPTION = 0x2;
 	public const int SW_MAXIMIZE = 3;
 	public const int SW_RESTORE = 9;
@@ -654,7 +624,19 @@ internal static partial class Native {
 	public const int HTBOTTOMLEFT = 16;
 	public const int HTBOTTOMRIGHT = 17;
 
-    [DllImport("user32.dll")]
+	public static void ShowMessage(IntPtr owner, string text, string caption) {
+		MessageBox(owner, text, caption, 0x00000010);
+	}
+	
+	public static void RunMessageLoop() {
+		while (GetMessage(out var msg, IntPtr.Zero, 0, 0) > 0) {
+			TranslateMessage(ref msg);
+			DispatchMessage(ref msg);
+		}
+	}
+	public delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+   [DllImport("user32.dll")]
 	public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
 	[DllImport("user32.dll")]
@@ -712,38 +694,52 @@ internal static partial class Native {
 	public static extern bool SetWindowText(IntPtr hWnd, string text);
 
 	[DllImport("user32.dll", SetLastError = true)]
-	public static extern int GetClientRect(IntPtr hWnd, out Rect lpRect);
+	public static extern int GetClientRect(IntPtr hWnd, out RECT lpRect);
 
 	[DllImport("user32.dll", SetLastError = true)]
 	public static extern int PostMessage(IntPtr hWnd, uint msg, UIntPtr wParam, IntPtr lParam);
 
-	public static void RunMessageLoop() {
-		while (GetMessage(out var msg, IntPtr.Zero, 0, 0) > 0) {
-			TranslateMessage(ref msg);
-			DispatchMessage(ref msg);
-		}
-	}
-
 	[DllImport("user32.dll", SetLastError = true)]
-	public static extern bool SetWindowPos(
-		IntPtr hWnd,
-		IntPtr hWndInsertAfter,
-		int X, int Y, int cx, int cy,
-		uint uFlags
-	);
-
-	public static void ShowMessage(IntPtr owner, string text, string caption) {
-		MessageBox(owner, text, caption, 0x00000010);
-	}
-
+	public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 	[DllImport("user32.dll", EntryPoint = "MessageBoxW", CharSet = CharSet.Unicode)]
 	static extern int MessageBox(IntPtr hWnd, string lpText, string lpCaption, uint uType);
 
 	[DllImport("user32.dll")]
-	public static extern bool GetWindowRect(IntPtr hWnd, out Rect rect);
+	public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+	public struct WNDCLASS {
+		public int style;
+		public IntPtr lpfnWndProc;
+		public int cbClsExtra;
+		public int cbWndExtra;
+		public IntPtr hInstance;
+		public IntPtr hIcon;
+		public IntPtr hIconSm;
+		public IntPtr hbrBackground;
+		public string lpszMenuName;
+		public string lpszClassName;
+	}
+
+	public struct MSG {
+		public IntPtr hwnd;
+		public uint message;
+		public IntPtr wParam;
+		public IntPtr lParam;
+		public uint time;
+		public int pt_x;
+		public int pt_y;
+	}
 
 	[StructLayout(LayoutKind.Sequential)]
-	public struct Rect {
+	public struct NCCALCSIZE_PARAMS {
+		public RECT rgrc0;
+		public RECT rgrc1;
+		public RECT rgrc2;
+		public IntPtr lppos;
+	}
+
+	[StructLayout(LayoutKind.Sequential)]
+	public struct RECT {
 		public int Left;
 		public int Top;
 		public int Right;
