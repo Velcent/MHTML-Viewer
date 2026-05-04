@@ -22,13 +22,15 @@
 		<InvariantGlobalization>true</InvariantGlobalization>
 		<SatelliteResourceLanguages>en</SatelliteResourceLanguages>
 
-		<ApplicationIcon>icon/UE.ico</ApplicationIcon>
+		<ApplicationIcon>app.ico</ApplicationIcon>
 	</PropertyGroup>
 
 	<ItemGroup>
 		<PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3912.50" />
-		<EmbeddedResource Include="Sidebar.html" />
-		<EmbeddedResource Include="ToggleSidebar.js" />
+		<EmbeddedResource Include="SideBar.html" />
+		<EmbeddedResource Include="ToggleSideBar.js" />
+		<EmbeddedResource Include="TitleBar.html" />
+		<EmbeddedResource Include="app.ico" />
 		<TrimmerRootAssembly Include="Microsoft.Web.WebView2.Core" />
 	</ItemGroup>
 

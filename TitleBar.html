@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<meta charset="utf-8" />
+	<style>
+		body {
+			margin: 0;
+			font-family: Segoe UI;
+			background: #1e1e1e;
+			color: white;
+			user-select: none;
+		}
+
+		.bar {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			height: 40px;
+			padding: 0 10px;
+		}
+
+		.left {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			flex: 1;
+			min-width: 0;
+		}
+
+		.icon {
+			width: 16px;
+			height: 16px;
+		}
+
+		.title {
+			font-size: 13px;
+			opacity: 0.9;
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			max-width: 500px;
+		}
+
+		.controls {
+			display: flex;
+			gap: 10px;
+		}
+
+		.btn {
+			width: 30px;
+			height: 30px;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			cursor: pointer;
+			border-radius: 4px;
+		}
+
+		.btn:hover {
+			background: #333;
+		}
+
+		.close:hover {
+			background: #e81123;
+		}
+	</style>
+</head>
+
+<body>
+
+	<div class="bar">
+
+		<div class="left" id="dragArea">
+			<img class="icon" id="appIcon">
+			<div class="title" id="title">MHTML Viewer</div>
+		</div>
+
+		<div class="controls">
+			<div class="btn" onclick="min()">—</div>
+			<div class="btn" id="maxBtn" onclick="toggleMax()">⬜</div>
+			<div class="btn close" onclick="closeApp()">✕</div>
+		</div>
+
+	</div>
+
+	</div>
+
+	<script>
+		const host = chrome.webview;
+
+		function min() {
+			host.postMessage("minimize");
+		}
+
+		function toggleMax() {
+			host.postMessage("toggleMaximize");
+		}
+
+		function closeApp() {
+			host.postMessage("close");
+		}
+
+		// === API dari C# ===
+
+		function setTitle(t) {
+			document.getElementById("title").innerText = t;
+		}
+
+		function setIcon(src) {
+			document.getElementById("appIcon").src = src;
+		}
+
+		function setMaximized(isMax) {
+			document.getElementById("maxBtn").innerText = isMax ? "❐" : "⬜";
+		}
+
+		// === drag ===
+		const drag = document.getElementById("dragArea");
+
+		drag.addEventListener("mousedown", () => {
+			host.postMessage("drag");
+		});
+
+		// double click = maximize
+		drag.addEventListener("dblclick", () => {
+			host.postMessage("toggleMaximize");
+		});
+	</script>
+
+</body>
+
+</html>
