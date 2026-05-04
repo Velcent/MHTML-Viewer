@@ -32,6 +32,7 @@
 			flex-direction: column;
 			background: #18181c;
 			border-right: 1px solid #34363b;
+			transition: width 0.15s ease;
 		}
 
 		#resizeHandle {
@@ -42,6 +43,10 @@
 			height: 100%;
 			cursor: ew-resize;
 			z-index: 10;
+		}
+
+		body.collapsed #resizeHandle {
+			display: none;
 		}
 
 		#resizeHandle:hover,
@@ -114,7 +119,7 @@
 
 		.arrow {
 			width: 12px;
-			padding-top: 7px;
+			padding-top: 5px;
 			display: inline-block;
 			text-align: center;
 			font-family: Arial;
@@ -154,28 +159,6 @@
 			background: #343a45;
 		}
 
-		#btnToggleSidebar {
-			position: absolute;
-			top: 50%;
-			right: 5px;
-			transform: translateY(-50%);
-			width: 28px;
-			height: 56px;
-			border: 1px solid #3d4148;
-			border-right-color: #4a5058;
-			border-radius: 8px;
-			background: #24272d;
-			color: #d7dbe2;
-			cursor: pointer;
-			z-index: 20;
-			box-shadow: 0 8px 18px rgba(0, 0, 0, .24);
-		}
-
-		#btnToggleSidebar:hover {
-			background: #303640;
-			border-color: #59616c;
-		}
-
 		body.collapsed #search,
 		body.collapsed #btnBack,
 		body.collapsed #btnForward,
@@ -186,12 +169,9 @@
 			display: none;
 		}
 
-		body.collapsed #btnToggleSidebar {
-			right: 8px;
-			width: 28px;
-			height: 64px;
+		body.collapsed #sidebar {
+			border-right: none;
 		}
-
 		::-webkit-scrollbar {
 			width: 10px;
 			height: 10px;
@@ -213,17 +193,49 @@
 			border: 2px solid transparent;
 			background-clip: padding-box;
 		}
+
+		#loadingOverlay {
+			position: fixed;
+			inset: 0;
+			background: rgba(20, 20, 22, 0.45);
+			display: none;
+			align-items: center;
+			justify-content: center;
+			z-index: 9999;
+			backdrop-filter: blur(2px);
+		}
+
+		#loadingOverlay.show {
+			display: flex;
+		}
+
+		.spinner {
+			width: 36px;
+			height: 36px;
+			border: 3px solid #444;
+			border-top-color: #4cafef;
+			border-radius: 50%;
+			animation: spin 0.7s linear infinite;
+		}
+
+		@keyframes spin {
+			to {
+				transform: rotate(360deg);
+			}
+		}
 	</style>
 </head>
 
 <body>
+	<div id="loadingOverlay">
+		<div class="spinner"></div>
+	</div>
 	<div id="app">
 		<div id="sidebar">
-			<button id="btnToggleSidebar" onclick="toggleSidebar()" title="Toggle sidebar">&lt;</button>
 			<div id="toolbarRow">
-				<button id="btnBack" onclick="goBack()">&lt;</button>
+				<button id="btnBack" onclick="goBack()">⮜</button>
 				<input id="search" placeholder="Search...">
-				<button id="btnForward" onclick="goForward()">&gt;</button>
+				<button id="btnForward" onclick="goForward()">⮞</button>
 			</div>
 			<div id="tree"></div>
 			<div id="error"></div>
@@ -235,7 +247,6 @@
 		const tree = document.getElementById("tree");
 		const errorBox = document.getElementById("error");
 		const resizeHandle = document.getElementById("resizeHandle");
-		const btnToggleSidebar = document.getElementById("btnToggleSidebar");
 		let allElements = [];
 		let resizing = false;
 		let collapsed = false;
@@ -255,8 +266,10 @@
 			}
 			if (target) {
 				const node = findNodeByPath(target);
-				if (node) setActive(node);
-				openFile(target);
+				if (node  && !node.classList.contains('active')) {
+					setActive(node);
+					openFile(target);
+				}
 			}
 		}
 
@@ -278,7 +291,7 @@
 
 			const arrow = document.createElement("span");
 			arrow.className = "arrow";
-			arrow.textContent = (node.children && node.children.length) ? ">" : "";
+			arrow.textContent = (node.children && node.children.length) ? "⮞" : "";
 
 			const title = document.createElement("span");
 			title.className = "title";
@@ -295,14 +308,15 @@
 				item.appendChild(children);
 				row.onclick = () => {
 					item.classList.toggle("open");
-					arrow.textContent = item.classList.contains("open") ? "v" : ">";
-					if (node.path) {
+					arrow.textContent = item.classList.contains("open") ? "⮟" : "⮞";
+					if (node.path && !item.classList.contains('active')) {
 						setActive(item);
 						openFile(node.path);
 					}
 				};
 			} else {
 				row.onclick = () => {
+					if(item.classList.contains('active')) return;
 					setActive(item);
 					openFile(node.path);
 				};
@@ -346,25 +360,7 @@
 			localStorage.setItem("sidebarCollapsed", "false");
 			collapsed = false;
 			document.body.classList.remove("collapsed");
-			btnToggleSidebar.textContent = "<";
 			sendMessage({ type: "resizeSidebar", width: nextWidth });
-		}
-
-		function toggleSidebar() {
-			setSidebarCollapsed(!collapsed);
-		}
-
-		function setSidebarCollapsed(nextCollapsed) {
-			collapsed = nextCollapsed;
-			localStorage.setItem("sidebarCollapsed", collapsed ? "true" : "false");
-			document.body.classList.toggle("collapsed", collapsed);
-			btnToggleSidebar.textContent = collapsed ? ">" : "<";
-			const width = parseInt(localStorage.getItem("sidebarWidth") || "340", 10);
-			sendMessage({
-				type: "collapseSidebar",
-				collapsed: collapsed,
-				width: Math.max(220, Math.min(720, width))
-			});
 		}
 
 		resizeHandle.addEventListener("pointerdown", e => {
@@ -413,8 +409,18 @@
 			document.querySelectorAll("#tree > .item").forEach(item => {
 				item.classList.add("open");
 				const arrow = item.querySelector(".arrow");
-				if (arrow && item.querySelector(":scope > .children")) arrow.textContent = "v";
+				if (arrow && item.querySelector(":scope > .children")) arrow.textContent = "⮟";
 			});
+		}
+
+		const loadingOverlay = document.getElementById("loadingOverlay");
+
+		function showLoading() {
+			loadingOverlay.classList.add("show");
+		}
+
+		function hideLoading() {
+			loadingOverlay.classList.remove("show");
 		}
 
 		document.getElementById("search").addEventListener("input", e => {
@@ -424,7 +430,7 @@
 					el.style.display = "";
 					el.classList.remove("open");
 					const a = el.querySelector(":scope > .row .arrow");
-					if (a && el.querySelector(":scope > .children")) a.textContent = ">";
+					if (a && el.querySelector(":scope > .children")) a.textContent = "⮞";
 				});
 				expandRoot();
 				const active = document.querySelector(".item.active");
@@ -445,7 +451,7 @@
 							p.style.display = "";
 							p.classList.add("open");
 							const a = p.querySelector(":scope > .row .arrow");
-							if (a) a.textContent = "v";
+							if (a) a.textContent = "⮟";
 						}
 						p = p.parentElement;
 					}
@@ -470,7 +476,7 @@
 		function openNode(item) {
 			item.classList.add("open");
 			const a = item.querySelector(":scope > .row .arrow");
-			if (a && item.querySelector(":scope > .children")) a.textContent = "v";
+			if (a && item.querySelector(":scope > .children")) a.textContent = "⮟";
 		}
 
 		function expandParents(node) {

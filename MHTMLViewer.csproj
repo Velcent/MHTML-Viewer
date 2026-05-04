@@ -27,7 +27,8 @@
 
 	<ItemGroup>
 		<PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3912.50" />
-		<EmbeddedResource Include="ui.html" />
+		<EmbeddedResource Include="Sidebar.html" />
+		<EmbeddedResource Include="ToggleSidebar.js" />
 		<TrimmerRootAssembly Include="Microsoft.Web.WebView2.Core" />
 	</ItemGroup>
 

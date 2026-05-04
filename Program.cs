@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -37,9 +38,15 @@ internal static class Program {
 internal sealed class WebViewHost : IDisposable {
 	const int InitialWidth = 1900;
 	const int InitialHeight = 1000;
-	const int CollapsedSidebarWidth = 44;
+	const int CollapsedSidebarWidth = 0;
 	const int MinSidebarWidth = 220;
 	const int MaxSidebarWidth = 720;
+
+	const string AppTitle = "MHTML Viewer by Velcent";
+	const string AppVersion = "1.0.0";
+	const string AppDescription = "A simple MHTML viewer using WebView2.";
+	const string SidebarRes = "Sidebar.html";
+	const string ToggleSidebarRes = "ToggleSidebar.js";
 
 	readonly string baseRoot = Directory.GetCurrentDirectory();
 	readonly ConcurrentDictionary<string, string> contentLocationMap = new(StringComparer.OrdinalIgnoreCase);
@@ -73,7 +80,7 @@ internal sealed class WebViewHost : IDisposable {
 		handle = NativeMethods.CreateWindowEx(
 			0,
 			wc.lpszClassName,
-			"MHTML Viewer by Velcent",
+			AppTitle,
 			0x10CF0000,
 			100, 100, InitialWidth, InitialHeight,
 			IntPtr.Zero,
@@ -85,29 +92,27 @@ internal sealed class WebViewHost : IDisposable {
 
 	public async Task InitializeAsync() {
 
+		string first = FindFirstFile(baseRoot);
+		if (string.IsNullOrEmpty(first)) return;
+
 		string tempPath = Path.Combine(Path.GetTempPath(), "MHTMLViewer");
 		var env = await CoreWebView2Environment.CreateAsync(null, tempPath);
-		UpdateLoadingProgress(10, "Creating WebView environment...");
-
+		UpdateLoadingProgress(30, "Creating WebView environment...");
 		navController = await env.CreateCoreWebView2ControllerAsync(handle);
-		UpdateLoadingProgress(30, "Creating navigation controller...");
-
 		viewerController = await env.CreateCoreWebView2ControllerAsync(handle);
-		UpdateLoadingProgress(50, "Creating viewer controller...");
 
 		navWeb = navController.CoreWebView2;
 		viewerWeb = viewerController.CoreWebView2;
+
 		ResizeWebView();
 
 		navWeb.Settings.AreDevToolsEnabled = false;
-		viewerWeb.Settings.AreDevToolsEnabled = false;
+		viewerWeb.Settings.AreDevToolsEnabled = true;
 		navWeb.SetVirtualHostNameToFolderMapping("app.local", tempPath, CoreWebView2HostResourceAccessKind.Allow);
+
 		navWeb.WebMessageReceived += WebMessageReceived;
 		viewerWeb.NavigationStarting += ViewerNavigationStarting;
 		viewerWeb.NavigationCompleted += ViewerNavigationCompleted;
-
-		string first = FindFirstFile(baseRoot);
-		if (string.IsNullOrEmpty(first)) return;
 
 		UpdateLoadingProgress(60, "Building link index...");
 		BuildLinkIndex();
@@ -118,21 +123,32 @@ internal sealed class WebViewHost : IDisposable {
 		string firstJson = JsonSerializer.Serialize(first, AppJsonContext.Default.String);
 
 		UpdateLoadingProgress(90, "Loading UI...");
-		string uiPath = Path.Combine(tempPath, "ui.html");
-		File.WriteAllText(uiPath, LoadUiHtml());
+		string uiPath = Path.Combine(tempPath, SidebarRes);
+		File.WriteAllText(uiPath, LoadHtml(SidebarRes));		
 
 		navWeb.NavigationCompleted += async (_, _) => {
 			await navWeb.ExecuteScriptAsync($"initTree({treeJson}, {firstJson});");
 		};
-		navWeb.Navigate("https://app.local/ui.html");
+		navWeb.Navigate("https://app.local/" + SidebarRes);
 
 		NativeMethods.SetWindowText(handle, Path.GetFileNameWithoutExtension(first));
 	}
-
 	void UpdateLoadingProgress(int percent, string status) {
 		string bar = new string('█', percent / 5);
 		string empty = new string(' ', 20 - percent / 5);
 		NativeMethods.SetWindowText(handle, $"Loading [{bar}{empty}] {percent}% - {status}");
+	}
+
+	async Task InjectToggleButton() {
+		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(ToggleSidebarRes));
+	}
+
+	void ToggleSidebar() {
+		sidebarCollapsed = !sidebarCollapsed;
+		ResizeWebView();
+		viewerWeb!.ExecuteScriptAsync(@"
+			document.querySelector('#sidebarHandle a').innerHTML = '" + (sidebarCollapsed ? '⮞' : '⮜') + @"';
+		");
 	}
 
 	IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam) {
@@ -166,9 +182,9 @@ internal sealed class WebViewHost : IDisposable {
 			if (type == "open") {
 				string fullPath = msg.RootElement.GetProperty("path").GetString() ?? "";
 				if (File.Exists(fullPath)) {
-					await OpenMhtmlAsync(fullPath, "");
+					await OpenMhtml(fullPath, "");
 				} else {
-					await ShowErrorAsync("File not found:\\n" + fullPath);
+					await ShowError("File not found:\\n" + fullPath);
 				}
 			} else if (type == "back") {
 				if (viewerWeb!.CanGoBack) viewerWeb.GoBack();
@@ -179,23 +195,26 @@ internal sealed class WebViewHost : IDisposable {
 				sidebarWidth = Math.Clamp(requestedWidth, MinSidebarWidth, MaxSidebarWidth);
 				sidebarCollapsed = false;
 				ResizeWebView();
-			} else if (type == "collapseSidebar") {
-				sidebarCollapsed = msg.RootElement.GetProperty("collapsed").GetBoolean();
-				if (msg.RootElement.TryGetProperty("width", out var widthProperty)) {
-					sidebarWidth = Math.Clamp(widthProperty.GetInt32(), MinSidebarWidth, MaxSidebarWidth);
-				}
-				ResizeWebView();
 			}
 		} catch (Exception ex) {
-			await ShowErrorAsync(ex.Message);
+			await ShowError(ex.Message);
 		}
 	}
 
 	async void ViewerNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e) {
-		if (!e.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase)) return;
+		if (e.Uri == "app://toggleSidebar") {
+			e.Cancel = true;
+			ToggleSidebar();
+			return;
+		}
+		if (!e.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase)) {
+			await navWeb!.ExecuteScriptAsync("showLoading()");
+			return;
+		}
 		e.Cancel = true;
 		if (!TryResolveMhtml(e.Uri, out string file, out string fragment)) return;
-		await OpenMhtmlAsync(file, fragment);
+		await navWeb!.ExecuteScriptAsync("showLoading()");
+		await OpenMhtml(file, fragment);
 	}
 
 	async void ViewerNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e) {
@@ -203,12 +222,13 @@ internal sealed class WebViewHost : IDisposable {
 			if (viewerWeb?.Source == null || !viewerWeb.Source.StartsWith("file:", StringComparison.OrdinalIgnoreCase)) return;
 			string path = new Uri(viewerWeb.Source).LocalPath;
 			string pathJson = JsonSerializer.Serialize(path, AppJsonContext.Default.String);
-			await navWeb!.ExecuteScriptAsync($"setActiveByPath({pathJson});");
+			await navWeb!.ExecuteScriptAsync($"setActiveByPath({pathJson}); hideLoading();");
+			await InjectToggleButton();
 		} catch {
 		}
 	}
 
-	async Task OpenMhtmlAsync(string file, string fragment) {
+	async Task OpenMhtml(string file, string fragment) {
 		string url = new Uri(file).AbsoluteUri;
 		if (!string.IsNullOrWhiteSpace(fragment)) {
 			url += "#" + Uri.EscapeDataString(fragment);
@@ -216,7 +236,7 @@ internal sealed class WebViewHost : IDisposable {
 		viewerWeb!.Navigate(url);
 	}
 
-	async Task ShowErrorAsync(string message) {
+	async Task ShowError(string message) {
 		string json = JsonSerializer.Serialize(message, AppJsonContext.Default.String);
 		if (navWeb != null) {
 			await navWeb.ExecuteScriptAsync($"showError({json});");
@@ -227,85 +247,146 @@ internal sealed class WebViewHost : IDisposable {
 
 	void BuildLinkIndex() {
 		Parallel.ForEach(
-			Directory.GetFiles(baseRoot, "*.mhtml", SearchOption.AllDirectories),
-			new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
-			IndexContentLocations);
-	}
+			Directory.EnumerateFiles(baseRoot, "*.mhtml", SearchOption.AllDirectories),
+			new ParallelOptions { MaxDegreeOfParallelism = 4 }, // tweak sesuai disk
+			file => {
+				Span<byte> buffer = stackalloc byte[512];
 
-	void IndexContentLocations(string file) {
-		using var sr = new StreamReader(file);
-		sr.ReadLine();
-		string? line = sr.ReadLine();
-		if (line?.StartsWith("Snapshot-Content-Location:", StringComparison.OrdinalIgnoreCase) == true) {
-			string loc = line[26..].Trim();
-			contentLocationMap.TryAdd(loc, file);
-			string name = Path.GetFileName(loc);
-			if (!string.IsNullOrWhiteSpace(name)) {
-				contentLocationMap.TryAdd(name, file);
-			}
-		}
+				using var fs = new FileStream(
+					file,
+					FileMode.Open,
+					FileAccess.Read,
+					FileShare.Read,
+					512,
+					FileOptions.SequentialScan);
+
+				int read = fs.Read(buffer);
+				if (read <= 0) return;
+
+				var text = Encoding.ASCII.GetString(buffer.Slice(0, read));
+
+				int idx = text.IndexOf("Snapshot-Content-Location:", StringComparison.OrdinalIgnoreCase);
+				if (idx < 0) return;
+
+				int start = idx + 26;
+				int end = text.IndexOf('\n', start);
+				if (end < 0) end = text.Length;
+
+				string loc = text[start..end].Trim();
+				loc = NormalizeUrl(loc);
+
+				contentLocationMap.TryAdd(loc, file);
+			});
 	}
 
 	bool TryResolveMhtml(string url, out string file, out string fragment) {
 		file = string.Empty;
 		fragment = string.Empty;
-		int i = url.IndexOf('#');
-		string baseUrl = url;
-		if (i >= 0) {
-			baseUrl = url[..i];
-			fragment = url[(i + 1)..];
-		}
+		// pisah fragment (#)
+		int hashIndex = url.IndexOf('#');
+		if (hashIndex >= 0) fragment = url[(hashIndex + 1)..];
+
+		string baseUrl = NormalizeUrl(url);
+
 		if (contentLocationMap.TryGetValue(baseUrl, out file!)) return true;
-		string name = Path.GetFileName(baseUrl);
-		return contentLocationMap.TryGetValue(name, out file!);
+		else return false;
+	}
+
+	string NormalizeUrl(string url) {
+		if (string.IsNullOrWhiteSpace(url)) return string.Empty;
+		url = url.Trim();
+		// buang fragment & query
+		int cut = url.IndexOfAny(new[] { '?', '#' });
+		if (cut >= 0) url = url[..cut];
+		// buang trailing slash
+		if (url.EndsWith("/")) url = url[..^1];
+		return url;
 	}
 
 	List<Node> BuildTree(string root) {
+		// 1. Scan semua file SEKALI
+		var allFiles = Directory
+			.EnumerateFiles(root, "*.mhtml", SearchOption.AllDirectories)
+			.ToList();
+
+		// 3. Group ke folder (RAM only → cepat)
+		var filesByDir = allFiles
+			.GroupBy(f => Path.GetDirectoryName(f)!)
+			.ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+		// 4. Build tree paralel
+		return BuildNode(root, filesByDir);
+	}
+	List<Node> BuildNode(string currentDir, Dictionary<string, List<string>> filesByDir) {
 		var items = new ConcurrentBag<Node>();
 
-		// Proses folder secara paralel
-		Parallel.ForEach(
-			Directory.GetDirectories(root).Where(ContainsMhtml),
-			new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
-			dir => {
-				List<Node> children = BuildTree(dir);
-
-				string? twinFile = Directory.GetFiles(root, "*.mhtml")
-					.FirstOrDefault(f =>
-						Path.GetFileNameWithoutExtension(f)
-							.Equals(Path.GetFileName(dir), StringComparison.OrdinalIgnoreCase));
-
-				string target = twinFile ?? FindFirstFile(dir);
-
-				items.Add(new Node {
-					name = Path.GetFileName(dir),
-					path = target,
-					children = children
-				});
-			}
-		);
-
-		// Proses file secara paralel
-		Parallel.ForEach(
-			Directory.GetFiles(root, "*.mhtml"),
-			new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
-			file => {
-				IndexContentLocations(file);
-
+		// === FILES ===
+		if (filesByDir.TryGetValue(currentDir, out var files)) {
+			Parallel.ForEach(files, file => {
 				items.Add(new Node {
 					name = Path.GetFileNameWithoutExtension(file),
 					path = file
 				});
-			}
-		);
+			});
+		}
 
-		// Sorting tetap dilakukan setelah semua selesai
+		// === DIRECTORIES ===
+		var dirs = Directory.EnumerateDirectories(currentDir);
+
+		Parallel.ForEach(dirs, dir => {
+
+			// cek cepat tanpa IO
+			bool hasContent =
+				filesByDir.ContainsKey(dir) ||
+				filesByDir.Keys.Any(k =>
+					k.StartsWith(dir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+
+			if (!hasContent) return;
+
+			var children = BuildNode(dir, filesByDir);
+
+			string? twinFile = filesByDir.TryGetValue(currentDir, out var currentFiles)
+				? currentFiles.FirstOrDefault(f =>
+					Path.GetFileNameWithoutExtension(f)
+						.Equals(Path.GetFileName(dir), StringComparison.OrdinalIgnoreCase))
+				: null;
+
+			string target = twinFile ?? FindFirstFromCache(dir, filesByDir);
+
+			items.Add(new Node {
+				name = Path.GetFileName(dir),
+				path = target,
+				children = children
+			});
+		});
+
+		// sorting tetap di akhir (single-thread → stabil)
 		return items
 			.GroupBy(x => x.name, StringComparer.OrdinalIgnoreCase)
 			.Select(g => g.FirstOrDefault(n => n.children != null) ?? g.First())
 			.OrderBy(n => ExtractNumber(n.name))
 			.ThenBy(n => n.name, new NaturalComparer())
 			.ToList();
+	}
+
+	string FindFirstFromCache(string dir, Dictionary<string, List<string>> filesByDir) {
+		if (filesByDir.TryGetValue(dir, out var files) && files.Count > 0) {
+			return files
+				.OrderBy(f => ExtractNumber(Path.GetFileName(f)))
+				.ThenBy(f => f)
+				.First();
+		}
+
+		foreach (var kv in filesByDir) {
+			if (kv.Key.StartsWith(dir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) {
+				return kv.Value
+					.OrderBy(f => ExtractNumber(Path.GetFileName(f)))
+					.ThenBy(f => f)
+					.First();
+			}
+		}
+
+		return string.Empty;
 	}
 
 	string LoadEmbedded(string resourceName) {
@@ -316,9 +397,9 @@ internal sealed class WebViewHost : IDisposable {
 		return reader.ReadToEnd();
 	}
 
-	string LoadUiHtml() {
-		string localPath = Path.Combine(baseRoot, "ui.html");
-		return File.Exists(localPath) ? File.ReadAllText(localPath) : LoadEmbedded("ui.html");
+	string LoadHtml(string resourceName) {
+		string localPath = Path.Combine(baseRoot, resourceName);
+		return File.Exists(localPath) ? File.ReadAllText(localPath) : LoadEmbedded(resourceName);
 	}
 
 	bool ContainsMhtml(string folder) {
