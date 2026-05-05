@@ -22,6 +22,7 @@ internal sealed class WebView : IDisposable {
 	const string TitleBarRes = "TitleBar.html";
 	const string IconRes = "app.ico";
 	bool isTitleUpdated = false;
+	bool isLoading = false;
 
 	readonly string baseRoot = Directory.GetCurrentDirectory();
 	readonly ConcurrentDictionary<string, string> contentLocationMap = new(StringComparer.OrdinalIgnoreCase);
@@ -221,16 +222,19 @@ internal sealed class WebView : IDisposable {
 			_ => "application/octet-stream"
 		};
 	}
-	CancellationTokenSource GetTitleLoopToken = new();
 	async Task GetTitleLoop() {
-		while (!GetTitleLoopToken.Token.IsCancellationRequested) {
-			await Task.Delay(200);
+		while (true) {
+			await WaitUntil(() => isLoading, 200);
 			if(viewerWeb != null) await viewerWeb.ExecuteScriptAsync($"getTitle()");
 			if (!isTitleUpdated) {
 				await SetTitle(Path.GetFileNameWithoutExtension(FindFirstFile(baseRoot)));
 			}
 			isTitleUpdated = false;
 		}
+	}
+	async Task WaitUntil(Func<bool> condition, int interval = 50) {
+		while (condition())
+			await Task.Delay(interval);
 	}
 	async Task SetTitle(string title) {
 		await titleWeb!.ExecuteScriptAsync($"setTitle('{title}')");
@@ -346,6 +350,7 @@ internal sealed class WebView : IDisposable {
 		}
 		if (!e.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase)) {
 			await navWeb!.ExecuteScriptAsync("showLoading()");
+			isLoading = true;
 			return;
 		}
 		e.Cancel = true;
@@ -361,6 +366,7 @@ internal sealed class WebView : IDisposable {
 			await navWeb!.ExecuteScriptAsync($"setActiveByPath({pathJson}); hideLoading();");
 			await InjectToggleButton();
 			await HideTitleLoading();
+			isLoading = false;
 		} catch {
 		}
 	}
