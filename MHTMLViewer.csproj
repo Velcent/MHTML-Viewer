@@ -1,6 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
+		<Version>1.2605.5</Version>
+		<FileVersion>1.2605.5.0</FileVersion>
+		<InformationalVersion>v1.2605.05.00</InformationalVersion>
+		<Description>A simple MHTML viewer using WebView2.</Description>
+
 		<OutputType>WinExe</OutputType>
 		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
 		<TargetFramework>net10.0-windows</TargetFramework>
