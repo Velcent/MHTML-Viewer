@@ -32,8 +32,6 @@ internal sealed class WebView : IDisposable {
 	CoreWebView2? viewerWeb;
 	CoreWebView2? titleWeb;
 	IntPtr handle;
-	int sidebarWidth = 340;
-	bool sidebarCollapsed;
 
 	// IMPORTANT: prevent GC
 	Native.WndProcDelegate? wndProcDelegate;
@@ -134,7 +132,7 @@ internal sealed class WebView : IDisposable {
 		int width = Math.Max(0, rect.Right - rect.Left);
 		int height = Math.Max(0, rect.Bottom - rect.Top);
 		int contentHeight = height - TitleBarHeight;
-		int sidebarW = sidebarCollapsed ? 0 : sidebarWidth;
+		int sidebarW = State.Current.collapsed ? 0 : State.Current.sidebarWidth;
 		bool isMax = Native.IsZoomed(handle);
 		int border = isMax ? ResizeBorder + 5 : ResizeBorder;
 		// TitleBar
@@ -160,10 +158,14 @@ internal sealed class WebView : IDisposable {
 	public async Task InitializeAsync() {
 
 		string first = FindFirstFile(baseRoot);
-		if (string.IsNullOrEmpty(first)) return;
-
+		if (string.IsNullOrEmpty(first)) {
+			Native.ShowMessage(handle, "No MHTML files found in the current directory.", "Error");
+			Native.PostQuitMessage(0);
+			return;
+		}
 		string tempPath = Path.Combine(Path.GetTempPath(), "MHTMLViewer");
 		var env = await CoreWebView2Environment.CreateAsync(null, tempPath);
+		
 		navController = await env.CreateCoreWebView2ControllerAsync(handle);
 		viewerController = await env.CreateCoreWebView2ControllerAsync(handle);
 		titleController = await env.CreateCoreWebView2ControllerAsync(handle);
@@ -175,21 +177,11 @@ internal sealed class WebView : IDisposable {
 		ResizeWebView();
 
 		navWeb.Settings.AreDevToolsEnabled = false;
-		viewerWeb.Settings.AreDevToolsEnabled = true;
+		viewerWeb.Settings.AreDevToolsEnabled = false;
 		titleWeb.Settings.AreDevToolsEnabled = false;
 		navWeb.Settings.AreDefaultContextMenusEnabled = false;
 		viewerWeb.Settings.AreDefaultContextMenusEnabled = true;
 		titleWeb.Settings.AreDefaultContextMenusEnabled = false;
-		navWeb.SetVirtualHostNameToFolderMapping("app.local", tempPath, CoreWebView2HostResourceAccessKind.Allow);
-		titleWeb.SetVirtualHostNameToFolderMapping("app.local", tempPath, CoreWebView2HostResourceAccessKind.Allow);
-
-		string sidebarPath = Path.Combine(tempPath, SidebarRes);
-		string titlePath = Path.Combine(tempPath, TitleBarRes);
-		string iconPath = Path.Combine(tempPath, IconRes);
-
-		File.WriteAllText(sidebarPath, LoadEmbedded(SidebarRes));
-		File.WriteAllText(titlePath, LoadEmbedded(TitleBarRes));
-		File.WriteAllBytes(iconPath, LoadEmbeddedBytes(IconRes));
 
 		titleWeb.WebMessageReceived += TitleWebMessageReceived;
 		navWeb.WebMessageReceived += NavWebMessageReceived;
@@ -197,10 +189,9 @@ internal sealed class WebView : IDisposable {
 		viewerWeb.NavigationCompleted += ViewerNavigationCompleted;
 		viewerWeb.WebMessageReceived += ViewerWebMessageReceived;
 
-		titleWeb.Navigate("https://app.local/" + TitleBarRes);
-		await SetIcon("https://app.local/" + IconRes);
-
-		await SetTitle(Path.GetFileNameWithoutExtension(first));
+		titleWeb.NavigateToString(LoadEmbedded(TitleBarRes));
+		await SetIcon($"data:{GetMime(IconRes)};base64,{Convert.ToBase64String(LoadEmbeddedBytes(IconRes))}");
+		_ = GetTitleLoop();
 
 		await ShowTitleLoading(50, "Building Link Index...");
 		BuildLinkIndex();
@@ -209,13 +200,26 @@ internal sealed class WebView : IDisposable {
 		List<Node> tree = BuildTree(baseRoot);
 		string treeJson = JsonSerializer.Serialize(tree, AppJsonContext.Default.ListNode);
 		string firstJson = JsonSerializer.Serialize(first, AppJsonContext.Default.String);
+		string stateJson = JsonSerializer.Serialize(State.Current, AppJsonContext.Default.STATE);
 
 		navWeb.NavigationCompleted += async (_, _) => {
-			await navWeb.ExecuteScriptAsync($"initTree({treeJson}, {firstJson})");
+			await navWeb.ExecuteScriptAsync($@"
+				initTree({treeJson}, {firstJson}, {stateJson});
+			");
 			await ShowTitleLoading(90, "Almost Ready...");
 		};
-		navWeb.Navigate("https://app.local/" + SidebarRes);
-		_ = GetTitleLoop();
+		navWeb.NavigateToString(LoadEmbedded(SidebarRes));
+	}
+	string GetMime(string fileName) {
+		string ext = Path.GetExtension(fileName).ToLowerInvariant();
+		return ext switch {
+			".png" => "image/png",
+			".jpg" or ".jpeg" => "image/jpeg",
+			".svg" => "image/svg+xml",
+			".ico" => "image/x-icon",
+			".webp" => "image/webp",
+			_ => "application/octet-stream"
+		};
 	}
 	CancellationTokenSource GetTitleLoopToken = new();
 	async Task GetTitleLoop() {
@@ -247,12 +251,16 @@ internal sealed class WebView : IDisposable {
 		await UpdateToggleSidebar();
 	}
 	async Task ToggleSidebar() {
-		sidebarCollapsed = !sidebarCollapsed;
-		await UpdateToggleSidebar();
+		State.Current.collapsed = !State.Current.collapsed;
+		State.Save(State.Current);
 		ResizeWebView();
+		await UpdateToggleSidebar();
 	}
 	async Task UpdateToggleSidebar() {
-		await viewerWeb!.ExecuteScriptAsync(@"document.querySelector('.sidebarHandle a').innerHTML = '" + (sidebarCollapsed ? '⮞' : '⮜') + @"';");
+		await viewerWeb!.ExecuteScriptAsync($@"
+			document.querySelector('.sidebarHandle a').innerHTML = '" + (State.Current.collapsed ? '⮞' : '⮜') + @"';
+		");
+		await navWeb!.ExecuteScriptAsync($"setCollapsed({State.Current.collapsed.ToString().ToLower()})");
 	}
 	async Task UpdateMaximizeState() {
 		bool isMax = Native.IsZoomed(handle);
@@ -299,26 +307,32 @@ internal sealed class WebView : IDisposable {
 		try {
 			using var msg = JsonDocument.Parse(e.WebMessageAsJson);
 			string type = msg.RootElement.GetProperty("type").GetString() ?? "";
-			if (type == "open") {
-				string fullPath = msg.RootElement.GetProperty("path").GetString() ?? "";
-				if (File.Exists(fullPath)) {
-					await OpenMhtml(fullPath, "");
-				} else {
-					await ShowError("File not found:\\n" + fullPath);
-				}
-			} else if (type == "back") {
-				if (viewerWeb!.CanGoBack) {
-					viewerWeb.GoBack();
-				}
-			} else if (type == "forward") {
-				if (viewerWeb!.CanGoForward) {
-					viewerWeb.GoForward();
-				}
-			} else if (type == "resizeSidebar") {
-				int requestedWidth = msg.RootElement.GetProperty("width").GetInt32();
-				sidebarWidth = Math.Clamp(requestedWidth, MinSidebarWidth, MaxSidebarWidth);
-				sidebarCollapsed = false;
-				ResizeWebView();
+			switch (type) {
+				case "setLastFile":
+					State.Current.lastFile = msg.RootElement.GetProperty("path").GetString() ?? "";
+					break;
+				case "open":
+					string fullPath = msg.RootElement.GetProperty("path").GetString() ?? "";
+					if (File.Exists(fullPath))
+						await OpenMhtml(fullPath, "");
+					else
+						await ShowError("File not found:\\n" + fullPath);
+					break;
+				case "back":
+					if (viewerWeb!.CanGoBack) 
+						viewerWeb.GoBack();
+					break;
+				case "forward":
+					if (viewerWeb!.CanGoForward)
+						viewerWeb.GoForward();
+					break;
+				case "resizeSidebar":
+					int requestedWidth = msg.RootElement.GetProperty("width").GetInt32();
+					State.Current.sidebarWidth = Math.Clamp(requestedWidth, MinSidebarWidth, MaxSidebarWidth);
+					State.Current.collapsed = false;
+					State.Save(State.Current);
+					ResizeWebView();
+					break;
 			}
 		} catch (Exception ex) {
 			await ShowError(ex.Message);

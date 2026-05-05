@@ -250,26 +250,31 @@
 		let allElements = [];
 		let resizing = false;
 		let collapsed = false;
+		let sidebarWidth = 340;
 
-		function initTree(data, firstPath) {
+
+		function initTree(data, firstPath, state) {
 			renderTree(data);
 			expandRoot();
-			restoreScroll();
-			const last = localStorage.getItem("lastFile");
-			const target = last || firstPath;
-			const sidebarWidth = parseInt(localStorage.getItem("sidebarWidth") || "", 10);
-			collapsed = localStorage.getItem("sidebarCollapsed") === "true";
-			if (collapsed) {
-				setSidebarCollapsed(true);
-			} else if (sidebarWidth) {
-				resizeSidebar(sidebarWidth);
-			}
+			const target = state.lastFile || firstPath;
 			if (target) {
 				const node = findNodeByPath(target);
 				if (node  && !node.classList.contains('active')) {
 					setActive(node);
 					openFile(target);
 				}
+			}
+			setCollapsed(state.collapsed);			
+		}
+
+		function setCollapsed(isCollapsed) {
+			collapsed = isCollapsed;
+			if (collapsed) {
+				document.body.classList.add("collapsed");
+			} else {
+				document.body.classList.remove("collapsed");
+				resizeSidebar(sidebarWidth);
+				document.querySelector(".item.active")?.scrollIntoView({ block: "nearest" });
 			}
 		}
 
@@ -333,7 +338,7 @@
 		}
 
 		function openFile(path) {
-			localStorage.setItem("lastFile", path);
+			sendMessage({ type: "setLastFile", path: path });
 			hideError();
 			sendMessage({ type: "open", path: path });
 		}
@@ -356,10 +361,7 @@
 
 		function resizeSidebar(width) {
 			const nextWidth = Math.max(220, Math.min(720, Math.round(width)));
-			localStorage.setItem("sidebarWidth", nextWidth.toString());
-			localStorage.setItem("sidebarCollapsed", "false");
-			collapsed = false;
-			document.body.classList.remove("collapsed");
+			sidebarWidth = nextWidth;
 			sendMessage({ type: "resizeSidebar", width: nextWidth });
 		}
 
@@ -459,20 +461,10 @@
 			});
 		});
 
-		tree.addEventListener("scroll", () => {
-			localStorage.setItem("scrollY", tree.scrollTop);
-		});
-
-		function restoreScroll() {
-			const y = localStorage.getItem("scrollY");
-			if (y) tree.scrollTop = parseInt(y);
-		}
-
 		function setActiveByPath(path) {
 			const node = findNodeByPath(path);
 			if (node) setActive(node);
 		}
-
 		function openNode(item) {
 			item.classList.add("open");
 			const a = item.querySelector(":scope > .row .arrow");
