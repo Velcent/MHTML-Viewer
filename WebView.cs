@@ -52,12 +52,16 @@ internal sealed class WebView : IDisposable {
 			hbrBackground = Native.CreateSolidBrush(0x101010)
         };
         Native.RegisterClass(ref wc);
+		int screenWidth = Native.GetSystemMetrics(Native.SM_CXSCREEN);
+		int screenHeight = Native.GetSystemMetrics(Native.SM_CYSCREEN);
+		int x = (screenWidth - InitialWidth) / 2;
+		int y = (screenHeight - InitialHeight) / 2;
 		handle = Native.CreateWindowEx(
 			0,
 			wc.lpszClassName,
 			AppTitle,
 			Native.WS_OVERLAPPEDWINDOW | Native.WS_VISIBLE,
-			100, 100, InitialWidth, InitialHeight,
+			x, y, InitialWidth, InitialHeight,
 			IntPtr.Zero,
 			IntPtr.Zero,
 			wc.hInstance,

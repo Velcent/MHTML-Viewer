@@ -15,6 +15,10 @@ internal static partial class Native {
 	public const uint SWP_NOSIZE = 0x0001;
 	public const uint SWP_NOMOVE = 0x0002;
 	public const uint SWP_FRAMECHANGED = 0x0020;
+	public const uint SWP_NOZORDER = 0x0004;
+	public const uint SWP_NOACTIVATE = 0x0010;
+	public const int SM_CXSCREEN = 0;
+	public const int SM_CYSCREEN = 1;
 	public const int GWL_STYLE = -16;
 	public const int WM_NCCALCSIZE = 0x0083;
 	public const int WM_SIZE = 0x0005;
@@ -60,6 +64,9 @@ internal static partial class Native {
 		}
 	}
 	public delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+	[DllImport("user32.dll")]
+	public static extern int GetSystemMetrics(int nIndex);
 
     // ===== PAINT FUNCTIONS =====
     [DllImport("user32.dll")]
