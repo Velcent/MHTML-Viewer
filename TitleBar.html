@@ -46,6 +46,7 @@
 			position: absolute;
 			left: 50%;
 			transform: translateX(-50%);
+			transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease;
 		}
 
 		.title.hidden {
@@ -114,7 +115,6 @@
 			}
 		}
 
-		.title,
 		.loading {
 			transition: opacity 0.25s ease;
 		}
@@ -122,6 +122,21 @@
 		/* Teks */
 		.loading-text {
 			white-space: nowrap;
+		}
+
+		[data-link] {
+			cursor: pointer;
+			color: inherit;
+			text-decoration: none;
+			transition: background-color 0.2s ease;
+			background-color: transparent;
+			border-radius: 5px;
+			padding: 4px 6px;
+			display: inline-block;
+		}
+
+		[data-link]:hover {
+			background-color: rgba(255, 255, 255, 0.1);
 		}
 	</style>
 </head>
@@ -151,23 +166,71 @@
 
 	<script>
 		const host = chrome.webview;
+		const titleEl = document.getElementById("title");
+		let lastIsAnimate = true;
+		let first = titleEl.getBoundingClientRect();
+		let last = titleEl.getBoundingClientRect();
+		let titleTimeout = null;
 
 		function min() {
-			host.postMessage("minimize");
+			host.postMessage({ type: "minimize" });
 		}
 
 		function toggleMax() {
-			host.postMessage("toggleMaximize");
+			host.postMessage({ type: "toggleMaximize" });
 		}
 
 		function closeApp() {
-			host.postMessage("close");
+			host.postMessage({ type: "close" });
 		}
 
 		// === API dari C# ===
 
-		function setTitle(t) {
-			document.getElementById("title").innerText = t;
+		function setTitle(title, isAnimate) {
+			cancelTitle();
+			if (isAnimate) {
+				if (lastIsAnimate) {
+					first = titleEl.getBoundingClientRect();
+					animateTitle(title)
+				} else {
+					titleTimeout = setTimeout(() => {
+						titleTimeout = null;
+						animateTitle(title)
+					}, 100);
+				}
+			} else {
+				first = titleEl.getBoundingClientRect()
+				titleEl.classList.add("hidden");
+				titleTimeout = setTimeout(() => {
+					titleEl.innerHTML = title;
+					titleEl.classList.remove("hidden");
+					titleTimeout = null;
+				}, 100);
+				lastIsAnimate = false;
+			}
+		}
+
+		function animateTitle(title) {
+			titleEl.style.transition = "opacity 0.25s ease";
+			titleEl.innerHTML = title;
+			last = titleEl.getBoundingClientRect();
+			const dx = first.left - last.left;
+			titleEl.style.transform = `translateX(calc(-50% + ${dx}px))`;
+			requestAnimationFrame(() => {
+				requestAnimationFrame(() => {
+					titleEl.style.transition = "";
+					titleEl.style.transform = "translateX(-50%)";
+				});
+			});
+			lastIsAnimate = true;
+		}
+
+		function cancelTitle() {
+			if (titleTimeout) {
+				clearTimeout(titleTimeout);
+				titleTimeout = null;
+				titleEl.classList.remove("hidden");
+			}
 		}
 
 		function setIcon(src) {
@@ -197,18 +260,22 @@
 		const drag = document.getElementById("dragArea");
 
 		let lastClick = 0;
-		drag.addEventListener("mousedown", () => {
-			host.postMessage("drag");
+		drag.addEventListener("mousedown", e => {
+			// handle link click
+			const el = e.target.closest('[data-link]');
+			if (el) {
+				const url = el.getAttribute('href');
+				if (url) host.postMessage({ type: "OpenLink", url: url });
+				return;
+			}
+			// handle drag
+			host.postMessage({ type: "drag" });
+			// handle double click to toggle maximize
 			const now = Date.now();
 			if (now - lastClick < 300) {
-				host.postMessage("toggleMaximize");
+				host.postMessage({ type: "toggleMaximize" });
 			}
 			lastClick = now;
-		});
-
-		// double click = maximize
-		drag.addEventListener("dblclick", () => {
-			host.postMessage("toggleMaximize");
 		});
 	</script>
 

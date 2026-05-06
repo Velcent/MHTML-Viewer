@@ -17,11 +17,13 @@ internal sealed class WebView : IDisposable {
 	const string AppTitle = "MHTML Viewer";
 	const string AppVersion = "1.0.0";
 	const string AppDescription = "A simple MHTML viewer using WebView2.";
-	const string SidebarRes = "SideBar.html";
-	const string ToggleSidebarRes = "ToggleSideBar.js";
-	const string TitleBarRes = "TitleBar.html";
 	const string IconRes = "app.ico";
+	const string TitleBarRes = "TitleBar.html";
+	const string SidebarRes = "SideBar.html";
+	const string GetTitleRes = "GetTitle.js";
+	const string ToggleSidebarRes = "ToggleSideBar.js";
 	bool isTitleUpdated = false;
+	bool isTitleInit = false;
 	bool isLoading = false;
 
 	readonly string baseRoot = Directory.GetCurrentDirectory();
@@ -178,7 +180,7 @@ internal sealed class WebView : IDisposable {
 		ResizeWebView();
 
 		navWeb.Settings.AreDevToolsEnabled = false;
-		viewerWeb.Settings.AreDevToolsEnabled = false;
+		viewerWeb.Settings.AreDevToolsEnabled = true;
 		titleWeb.Settings.AreDevToolsEnabled = false;
 		navWeb.Settings.AreDefaultContextMenusEnabled = false;
 		viewerWeb.Settings.AreDefaultContextMenusEnabled = true;
@@ -224,21 +226,18 @@ internal sealed class WebView : IDisposable {
 	}
 	async Task GetTitleLoop() {
 		while (true) {
-			await WaitUntil(() => isLoading, 200);
-			if(viewerWeb != null) await viewerWeb.ExecuteScriptAsync($"getTitle()");
+			if (isTitleInit) await viewerWeb!.ExecuteScriptAsync($"getTitle()");
+			await Task.Delay(200);
+			if (!isTitleInit) continue;
+			if (isLoading) isTitleUpdated = true;
 			if (!isTitleUpdated) {
-				await SetTitle(Path.GetFileNameWithoutExtension(FindFirstFile(baseRoot)));
+				await SetTitle(Path.GetFileNameWithoutExtension(FindFirstFile(baseRoot)), false);
 			}
 			isTitleUpdated = false;
 		}
 	}
-	async Task WaitUntil(Func<bool> condition, int interval = 50) {
-		while (condition())
-			await Task.Delay(interval);
-	}
-	async Task SetTitle(string title) {
-		await titleWeb!.ExecuteScriptAsync($"setTitle('{title}')");
-
+	async Task SetTitle(string title, bool isAnimate = true) {
+		await titleWeb!.ExecuteScriptAsync($"setTitle('{title}', {isAnimate.ToString().ToLower()})");
 	}
 	async Task SetIcon(string path) {
 		string url = new Uri(path).AbsoluteUri;
@@ -253,6 +252,9 @@ internal sealed class WebView : IDisposable {
 	async Task InjectToggleButton() {
 		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(ToggleSidebarRes));
 		await UpdateToggleSidebar();
+	}
+	async Task InjectGetTitle() {
+		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(GetTitleRes));
 	}
 	async Task ToggleSidebar() {
 		State.Current.collapsed = !State.Current.collapsed;
@@ -276,7 +278,8 @@ internal sealed class WebView : IDisposable {
 		switch (type) {
 			case "SetTitle":
 				var data = json.RootElement.GetProperty("data").GetString();
-				await SetTitle(data!);
+				var anim = json.RootElement.GetProperty("anim").GetBoolean();
+				await SetTitle(data!, anim);
 				break;
 			case "UpdateTitle":
 				isTitleUpdated = true;
@@ -284,8 +287,14 @@ internal sealed class WebView : IDisposable {
 		}
 	}
 	async void TitleWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e) {
-		string msg = e.TryGetWebMessageAsString();
-		switch (msg) {
+		using var msg = JsonDocument.Parse(e.WebMessageAsJson);
+		string type = msg.RootElement.GetProperty("type").GetString() ?? "";
+		switch (type) {
+			case "OpenLink":
+				string url = msg.RootElement.GetProperty("url").GetString() ?? "";
+				if (url == "#") await viewerWeb!.ExecuteScriptAsync("window.scrollTo(0, 0)");
+				else await OpenLink(url);
+				break;
 			case "toggleMaximize":
 				if (Native.IsZoomed(handle))
 					Native.ShowWindow(handle, Native.SW_RESTORE);
@@ -348,15 +357,7 @@ internal sealed class WebView : IDisposable {
 			await ToggleSidebar();
 			return;
 		}
-		if (!e.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase)) {
-			await navWeb!.ExecuteScriptAsync("showLoading()");
-			isLoading = true;
-			return;
-		}
-		e.Cancel = true;
-		if (!TryResolveMhtml(e.Uri, out string file, out string fragment)) return;
-		await OpenMhtml(file, fragment);
-
+		await OpenLink(e);
 	}
 	async void ViewerNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e) {
 		try {
@@ -364,11 +365,35 @@ internal sealed class WebView : IDisposable {
 			string path = new Uri(viewerWeb.Source).LocalPath;
 			string pathJson = JsonSerializer.Serialize(path, AppJsonContext.Default.String);
 			await navWeb!.ExecuteScriptAsync($"setActiveByPath({pathJson}); hideLoading();");
+			await InjectGetTitle();
 			await InjectToggleButton();
 			await HideTitleLoading();
 			isLoading = false;
+			if (!isTitleInit) {
+				 await viewerWeb!.ExecuteScriptAsync($"getTitle(false)");
+				isTitleInit = true;
+			}
 		} catch {
 		}
+	}
+	async Task OpenLink(CoreWebView2NavigationStartingEventArgs e) {
+		if (!e.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase)) {
+			isLoading = true;
+			await navWeb!.ExecuteScriptAsync("showLoading()");
+			return;
+		}
+		e.Cancel = true;
+		if (!TryResolveMhtml(e.Uri, out string file, out string fragment)) return;
+		await OpenMhtml(file, fragment);
+	}
+	async Task OpenLink(string url) {
+		if (!url.StartsWith("http", StringComparison.OrdinalIgnoreCase)) {
+			isLoading = true;
+			await navWeb!.ExecuteScriptAsync("showLoading()");
+			return;
+		}
+		if (!TryResolveMhtml(url, out string file, out string fragment)) return;
+		await OpenMhtml(file, fragment);
 	}
 	async Task OpenMhtml(string file, string fragment) {
 		string url = new Uri(file).AbsoluteUri;
@@ -388,17 +413,9 @@ internal sealed class WebView : IDisposable {
 	void BuildLinkIndex() {
 		Parallel.ForEach(
 			Directory.EnumerateFiles(baseRoot, "*.mhtml", SearchOption.AllDirectories),
-			new ParallelOptions { MaxDegreeOfParallelism = 4 }, // tweak sesuai disk
 			file => {
 				Span<byte> buffer = stackalloc byte[512];
-
-				using var fs = new FileStream(
-					file,
-					FileMode.Open,
-					FileAccess.Read,
-					FileShare.Read,
-					512,
-					FileOptions.SequentialScan);
+				using var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, 512, FileOptions.SequentialScan);
 
 				int read = fs.Read(buffer);
 				if (read <= 0) return;
