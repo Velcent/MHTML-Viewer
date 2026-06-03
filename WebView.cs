@@ -55,19 +55,35 @@ internal sealed class WebView : IDisposable {
         Native.RegisterClass(ref wc);
 		int screenWidth = Native.GetSystemMetrics(Native.SM_CXSCREEN);
 		int screenHeight = Native.GetSystemMetrics(Native.SM_CYSCREEN);
-		int x = (screenWidth - InitialWidth) / 2;
-		int y = (screenHeight - InitialHeight) / 2;
-		handle = Native.CreateWindowEx(
-			0,
-			wc.lpszClassName,
-			AppTitle,
-			Native.WS_OVERLAPPEDWINDOW | Native.WS_VISIBLE,
-			x, y, InitialWidth, InitialHeight,
-			IntPtr.Zero,
-			IntPtr.Zero,
-			wc.hInstance,
-			IntPtr.Zero
-		);
+		if (InitialWidth < screenWidth) {
+			int x = (screenWidth - InitialWidth) / 2;
+			int y = (screenHeight - InitialHeight) / 2;
+			handle = Native.CreateWindowEx(
+				0,
+				wc.lpszClassName,
+				AppTitle,
+				Native.WS_OVERLAPPEDWINDOW | Native.WS_VISIBLE,
+				x, y, InitialWidth, InitialHeight,
+				IntPtr.Zero,
+				IntPtr.Zero,
+				wc.hInstance,
+				IntPtr.Zero
+			);
+		} else {
+			handle = Native.CreateWindowEx(
+				0,
+				wc.lpszClassName,
+				AppTitle,
+				Native.WS_POPUP | Native.WS_VISIBLE,
+				0, 0,
+				Native.GetSystemMetrics(0), // SM_CXSCREEN
+				Native.GetSystemMetrics(1), // SM_CYSCREEN
+				IntPtr.Zero,
+				IntPtr.Zero,
+				wc.hInstance,
+				IntPtr.Zero
+			);
+		}
 		int style = Native.GetWindowLong(handle, Native.GWL_STYLE);
 		style &= ~Native.WS_CAPTION;      // hapus titlebar
 		style |= Native.WS_THICKFRAME;    // pastikan resize aktif
@@ -167,7 +183,10 @@ internal sealed class WebView : IDisposable {
 			return;
 		}
 		string tempPath = Path.Combine(Path.GetTempPath(), "MHTMLViewer");
-		var env = await CoreWebView2Environment.CreateAsync(null, tempPath);
+		var options = new CoreWebView2EnvironmentOptions(
+			"--allow-file-access-from-files --disable-web-security"
+		);
+		var env = await CoreWebView2Environment.CreateAsync(null, tempPath, options);
 		
 		navController = await env.CreateCoreWebView2ControllerAsync(handle);
 		viewerController = await env.CreateCoreWebView2ControllerAsync(handle);
@@ -180,7 +199,7 @@ internal sealed class WebView : IDisposable {
 		ResizeWebView();
 
 		navWeb.Settings.AreDevToolsEnabled = false;
-		viewerWeb.Settings.AreDevToolsEnabled = false;
+		viewerWeb.Settings.AreDevToolsEnabled = true;
 		titleWeb.Settings.AreDevToolsEnabled = false;
 		navWeb.Settings.AreDefaultContextMenusEnabled = false;
 		viewerWeb.Settings.AreDefaultContextMenusEnabled = true;
@@ -370,7 +389,7 @@ internal sealed class WebView : IDisposable {
 			await HideTitleLoading();
 			isLoading = false;
 			if (!isTitleInit) {
-				 await viewerWeb!.ExecuteScriptAsync($"getTitle(false)");
+				await viewerWeb!.ExecuteScriptAsync($"getTitle(false)");
 				isTitleInit = true;
 			}
 		} catch {
@@ -458,12 +477,13 @@ internal sealed class WebView : IDisposable {
 		return url;
 	}
 	List<Node> BuildTree(string root) {
-		// 1. Scan semua file SEKALI
+		// 1. Scan semua file
 		var allFiles = Directory
 			.EnumerateFiles(root, "*.mhtml", SearchOption.AllDirectories)
+			.Concat(Directory.EnumerateFiles(root, "*.html", SearchOption.AllDirectories))
 			.ToList();
 
-		// 3. Group ke folder (RAM only → cepat)
+		// 3. Group ke folder (RAM only)
 		var filesByDir = allFiles
 			.GroupBy(f => Path.GetDirectoryName(f)!)
 			.ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
@@ -514,7 +534,7 @@ internal sealed class WebView : IDisposable {
 			});
 		});
 
-		// sorting tetap di akhir (single-thread → stabil)
+		// sorting tetap di akhir (single-thread)
 		return items
 			.GroupBy(x => x.name, StringComparer.OrdinalIgnoreCase)
 			.Select(g => g.FirstOrDefault(n => n.children != null) ?? g.First())
@@ -556,24 +576,16 @@ internal sealed class WebView : IDisposable {
 		using var reader = new StreamReader(stream!);
 		return reader.ReadToEnd();
 	}
-	string LoadHtml(string resourceName) {
-		string localPath = Path.Combine(baseRoot, resourceName);
-		return File.Exists(localPath) ? File.ReadAllText(localPath) : LoadEmbedded(resourceName);
-	}
-	bool ContainsMhtml(string folder) {
-		return Directory.GetFiles(folder, "*.mhtml", SearchOption.AllDirectories).Any();
-	}
+	bool isFirstFileInit = false;
+	string FirstFile = string.Empty;
 	string FindFirstFile(string root) {
+		if (isFirstFileInit) return FirstFile;
 		var files = Directory.GetFiles(root, "*.mhtml")
 			.OrderBy(f => ExtractNumber(Path.GetFileName(f)))
 			.ThenBy(f => f);
-		if (files.Any()) return files.First();
-
-		foreach (string dir in Directory.GetDirectories(root).OrderBy(d => ExtractNumber(Path.GetFileName(d)))) {
-			string found = FindFirstFile(dir);
-			if (!string.IsNullOrEmpty(found)) return found;
-		}
-		return string.Empty;
+		if (files.Any()) FirstFile = files.First();
+		isFirstFileInit = true;
+		return FirstFile;
 	}
 	int ExtractNumber(string name) {
 		string[] parts = name.Split('.');

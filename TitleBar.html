@@ -171,6 +171,7 @@
 		let first = titleEl.getBoundingClientRect();
 		let last = titleEl.getBoundingClientRect();
 		let titleTimeout = null;
+		let currentTitle;
 
 		function min() {
 			host.postMessage({ type: "minimize" });
@@ -187,6 +188,8 @@
 		// === API dari C# ===
 
 		function setTitle(title, isAnimate) {
+			if (title === currentTitle) return;
+			currentTitle = title;
 			cancelTitle();
 			if (isAnimate) {
 				if (lastIsAnimate) {
