@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Web.WebView2.Core;
+using System.Net;
 
 internal sealed class WebView : IDisposable {
 	const int InitialWidth = 1900;
@@ -498,7 +499,7 @@ internal sealed class WebView : IDisposable {
 		if (filesByDir.TryGetValue(currentDir, out var files)) {
 			Parallel.ForEach(files, file => {
 				items.Add(new Node {
-					name = Path.GetFileNameWithoutExtension(file),
+					name = WebUtility.HtmlDecode(Path.GetFileNameWithoutExtension(file)),
 					path = file
 				});
 			});
