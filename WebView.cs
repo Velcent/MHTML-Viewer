@@ -22,6 +22,7 @@ internal sealed class WebView : IDisposable {
 	const string TitleBarRes = "TitleBar.html";
 	const string SidebarRes = "SideBar.html";
 	const string GetTitleRes = "GetTitle.js";
+	const string UnrealCSSRes = "Unreal.css";
 	const string ToggleSidebarRes = "ToggleSideBar.js";
 	bool isTitleUpdated = false;
 	bool isTitleInit = false;
@@ -269,12 +270,21 @@ internal sealed class WebView : IDisposable {
 	async Task HideTitleLoading() {
 		await titleWeb!.ExecuteScriptAsync($"hideLoading()");
 	}
+	async Task InjectGetTitle() {
+		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(GetTitleRes));
+	}
+	async Task InjectUnrealCSS() {
+		await viewerWeb!.ExecuteScriptAsync($@"
+		const style = document.createElement('style');
+		style.textContent = `
+			{LoadEmbedded(UnrealCSSRes)}
+		`;
+		document.documentElement.appendChild(style);
+		");
+	}
 	async Task InjectToggleButton() {
 		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(ToggleSidebarRes));
 		await UpdateToggleSidebar();
-	}
-	async Task InjectGetTitle() {
-		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(GetTitleRes));
 	}
 	async Task ToggleSidebar() {
 		State.Current.collapsed = !State.Current.collapsed;
@@ -385,6 +395,7 @@ internal sealed class WebView : IDisposable {
 			string path = new Uri(viewerWeb.Source).LocalPath;
 			string pathJson = JsonSerializer.Serialize(path, AppJsonContext.Default.String);
 			await navWeb!.ExecuteScriptAsync($"setActiveByPath({pathJson}); hideLoading();");
+			// await InjectUnrealCSS(); // style masih bug
 			await InjectGetTitle();
 			await InjectToggleButton();
 			await HideTitleLoading();

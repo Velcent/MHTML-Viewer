@@ -1,9 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<Version>1.2605.06.00</Version>
-		<FileVersion>1.2605.06.00</FileVersion>
-		<InformationalVersion>v1.2605.06.00</InformationalVersion>
+		<Version>1.2606.16.00</Version>
+		<FileVersion>1.2606.16.00</FileVersion>
+		<InformationalVersion>v1.2606.16.00</InformationalVersion>
 		<Description>A simple MHTML viewer using WebView2.</Description>
 
 		<OutputType>WinExe</OutputType>
@@ -36,6 +36,7 @@
 		<EmbeddedResource Include="TitleBar.html" />
 		<EmbeddedResource Include="SideBar.html" />
 		<EmbeddedResource Include="GetTitle.js" />
+		<!-- <EmbeddedResource Include="Unreal.css" /> -->
 		<EmbeddedResource Include="ToggleSideBar.js" />
 		<TrimmerRootAssembly Include="Microsoft.Web.WebView2.Core" />
 	</ItemGroup>
