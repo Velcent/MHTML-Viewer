@@ -24,6 +24,7 @@ internal sealed class WebView : IDisposable {
 	const string GetTitleRes = "GetTitle.js";
 	const string UnrealCSSRes = "Unreal.css";
 	const string ToggleSidebarRes = "ToggleSideBar.js";
+	const string LocalMediaHost = "media.local";
 	bool isTitleUpdated = false;
 	bool isTitleInit = false;
 	bool isLoading = false;
@@ -197,6 +198,7 @@ internal sealed class WebView : IDisposable {
 		navWeb = navController.CoreWebView2;
 		viewerWeb = viewerController.CoreWebView2;
 		titleWeb = titleController.CoreWebView2;
+		ConfigureLocalMediaHost(viewerWeb);
 
 		ResizeWebView();
 
@@ -210,7 +212,9 @@ internal sealed class WebView : IDisposable {
 		titleWeb.WebMessageReceived += TitleWebMessageReceived;
 		navWeb.WebMessageReceived += NavWebMessageReceived;
 		viewerWeb.NavigationStarting += ViewerNavigationStarting;
+		viewerWeb.FrameNavigationStarting += ViewerFrameNavigationStarting;
 		viewerWeb.NavigationCompleted += ViewerNavigationCompleted;
+		viewerWeb.NewWindowRequested += ViewerNewWindowRequested;
 		viewerWeb.WebMessageReceived += ViewerWebMessageReceived;
 
 		titleWeb.NavigateToString(LoadEmbedded(TitleBarRes));
@@ -237,6 +241,7 @@ internal sealed class WebView : IDisposable {
 	string GetMime(string fileName) {
 		string ext = Path.GetExtension(fileName).ToLowerInvariant();
 		return ext switch {
+			".mp4" => "video/mp4",
 			".png" => "image/png",
 			".jpg" or ".jpeg" => "image/jpeg",
 			".svg" => "image/svg+xml",
@@ -244,6 +249,13 @@ internal sealed class WebView : IDisposable {
 			".webp" => "image/webp",
 			_ => "application/octet-stream"
 		};
+	}
+	void ConfigureLocalMediaHost(CoreWebView2 web) {
+		web.SetVirtualHostNameToFolderMapping(
+			LocalMediaHost,
+			baseRoot,
+			CoreWebView2HostResourceAccessKind.Allow
+		);
 	}
 	async Task GetTitleLoop() {
 		while (true) {
@@ -387,10 +399,28 @@ internal sealed class WebView : IDisposable {
 			await ToggleSidebar();
 			return;
 		}
+		if (IsLocalMediaUrl(e.Uri)) return;
 		await OpenLink(e);
+	}
+	async void ViewerFrameNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e) {
+		if (!IsLocalMediaUrl(e.Uri)) return;
+		e.Cancel = true;
+		await OpenLocalMedia(e.Uri);
+	}
+	async void ViewerNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e) {
+		if (!IsLocalMediaUrl(e.Uri)) return;
+		e.Handled = true;
+		await OpenLocalMedia(e.Uri);
 	}
 	async void ViewerNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e) {
 		try {
+			if (viewerWeb?.Source != null && IsLocalMediaUrl(viewerWeb.Source)) {
+				string title = Path.GetFileName(new Uri(viewerWeb.Source).LocalPath);
+				await SetTitle(title, false);
+				await HideTitleLoading();
+				isLoading = false;
+				return;
+			}
 			if (viewerWeb?.Source == null || !viewerWeb.Source.StartsWith("file:", StringComparison.OrdinalIgnoreCase)) return;
 			string path = new Uri(viewerWeb.Source).LocalPath;
 			string pathJson = JsonSerializer.Serialize(path, AppJsonContext.Default.String);
@@ -425,6 +455,33 @@ internal sealed class WebView : IDisposable {
 		}
 		if (!TryResolveMhtml(url, out string file, out string fragment)) return;
 		await OpenMhtml(file, fragment);
+	}
+	bool IsLocalMediaUrl(string url) {
+		return Uri.TryCreate(url, UriKind.Absolute, out var uri)
+			&& uri.Host.Equals(LocalMediaHost, StringComparison.OrdinalIgnoreCase);
+	}
+	async Task OpenLocalMedia(string url) {
+		if (!TryResolveLocalMediaPath(url, out string file)) {
+			await ShowError("Media file not found:\\n" + url);
+			return;
+		}
+		viewerWeb!.Navigate(url);
+	}
+	bool TryResolveLocalMediaPath(string url, out string file) {
+		file = string.Empty;
+		if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
+		if (!uri.Host.Equals(LocalMediaHost, StringComparison.OrdinalIgnoreCase)) return false;
+
+		string relativePath = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/'))
+			.Replace('/', Path.DirectorySeparatorChar);
+		string fullPath = Path.GetFullPath(Path.Combine(baseRoot, relativePath));
+		string rootPath = Path.GetFullPath(baseRoot);
+		if (!rootPath.EndsWith(Path.DirectorySeparatorChar)) rootPath += Path.DirectorySeparatorChar;
+		if (!fullPath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase)) return false;
+		if (!File.Exists(fullPath)) return false;
+
+		file = fullPath;
+		return true;
 	}
 	async Task OpenMhtml(string file, string fragment) {
 		string url = new Uri(file).AbsoluteUri;
