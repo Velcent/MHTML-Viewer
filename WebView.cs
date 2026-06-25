@@ -452,16 +452,7 @@ internal sealed class WebView : IDisposable {
 			if (!string.IsNullOrWhiteSpace(pendingFragment)) {
 				string fragment = pendingFragment;
 				pendingFragment = string.Empty;
-				string fragmentJson = JsonSerializer.Serialize(fragment, AppJsonContext.Default.String);
-				await viewerWeb!.ExecuteScriptAsync($@"
-					(() => {{
-						const raw = {fragmentJson};
-						const decoded = decodeURIComponent(raw);
-						const target = document.getElementById(decoded) || document.getElementById(raw);
-						if (target) target.scrollIntoView();
-						location.hash = raw;
-					}})();
-				");
+				await NavigateToFragment(fragment);
 			}
 			await HideTitleLoading();
 			isLoading = false;
@@ -480,6 +471,7 @@ internal sealed class WebView : IDisposable {
 		}
 		e.Cancel = true;
 		if (!TryResolveMhtml(e.Uri, out string file, out string fragment)) return;
+		if (await TryNavigateCurrentDocumentFragment(file, fragment)) return;
 		await OpenMhtml(file, fragment);
 	}
 	async Task OpenLink(string url) {
@@ -489,7 +481,35 @@ internal sealed class WebView : IDisposable {
 			return;
 		}
 		if (!TryResolveMhtml(url, out string file, out string fragment)) return;
+		if (await TryNavigateCurrentDocumentFragment(file, fragment)) return;
 		await OpenMhtml(file, fragment);
+	}
+	async Task<bool> TryNavigateCurrentDocumentFragment(string file, string fragment) {
+		if (!file.Equals(currentFilePath, StringComparison.OrdinalIgnoreCase)) return false;
+		if (viewerWeb == null) return false;
+
+		await NavigateToFragment(fragment);
+		return true;
+	}
+	async Task NavigateToFragment(string fragment) {
+		string fragmentJson = JsonSerializer.Serialize(fragment, AppJsonContext.Default.String);
+		await viewerWeb!.ExecuteScriptAsync($@"
+			(() => {{
+				const raw = {fragmentJson};
+				if (!raw) {{
+					history.replaceState(null, '', location.pathname + location.search);
+					window.scrollTo(0, 0);
+					return;
+				}}
+				const decoded = decodeURIComponent(raw);
+				const target = document.getElementById(decoded)
+					|| document.getElementById(raw)
+					|| document.querySelector(`[name=""${{CSS.escape(decoded)}}""]`)
+					|| document.querySelector(`[name=""${{CSS.escape(raw)}}""]`);
+				if (target) target.scrollIntoView();
+				location.hash = raw;
+			}})();
+		");
 	}
 	bool IsLocalMediaUrl(string url) {
 		return Uri.TryCreate(url, UriKind.Absolute, out var uri)
