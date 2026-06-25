@@ -29,7 +29,7 @@ internal sealed class WebView : IDisposable {
 	bool isTitleInit = false;
 	bool isLoading = false;
 
-	readonly string baseRoot = Directory.GetCurrentDirectory();
+	readonly string baseRoot = Path.Combine(Directory.GetCurrentDirectory(), "mhtml");
 	readonly ConcurrentDictionary<string, string> contentLocationMap = new(StringComparer.OrdinalIgnoreCase);
 	CoreWebView2Controller? navController;
 	CoreWebView2Controller? viewerController;
@@ -181,7 +181,7 @@ internal sealed class WebView : IDisposable {
 
 		string first = FindFirstFile(baseRoot);
 		if (string.IsNullOrEmpty(first)) {
-			Native.ShowMessage(handle, "No MHTML files found in the current directory.", "Error");
+			Native.ShowMessage(handle, "No MHTML files found in the mhtml folder.", "Error");
 			Native.PostQuitMessage(0);
 			return;
 		}
@@ -649,7 +649,7 @@ internal sealed class WebView : IDisposable {
 	string FirstFile = string.Empty;
 	string FindFirstFile(string root) {
 		if (isFirstFileInit) return FirstFile;
-		var files = Directory.GetFiles(root, "*.mhtml")
+		var files = Directory.GetFiles(root, "*.mhtml", SearchOption.AllDirectories)
 			.OrderBy(f => ExtractNumber(Path.GetFileName(f)))
 			.ThenBy(f => f);
 		if (files.Any()) FirstFile = files.First();

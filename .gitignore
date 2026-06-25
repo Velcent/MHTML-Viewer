@@ -1,4 +1,6 @@
 bin/
 obj/
 icon/
-mp4/
+mhtml/
+assets/
+MHTMLViewer.exe
