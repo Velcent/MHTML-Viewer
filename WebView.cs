@@ -24,23 +24,39 @@ internal sealed class WebView : IDisposable {
 	const string GetTitleRes = "GetTitle.js";
 	const string UnrealCSSRes = "Unreal.css";
 	const string ToggleSidebarRes = "ToggleSideBar.js";
+	const string DocumentResourceHost = "mhtml.local";
 	const string LocalMediaHost = "media.local";
 	bool isTitleUpdated = false;
 	bool isTitleInit = false;
 	bool isLoading = false;
 
-	readonly string baseRoot = Path.Combine(Directory.GetCurrentDirectory(), "mhtml");
+	readonly string workspaceRoot;
+	readonly string baseRoot;
+	readonly Dictionary<string, OfflineAsset> offlineAssets;
 	readonly ConcurrentDictionary<string, string> contentLocationMap = new(StringComparer.OrdinalIgnoreCase);
+	readonly ConcurrentDictionary<string, LoadedDocument> documentCache = new(StringComparer.OrdinalIgnoreCase);
 	CoreWebView2Controller? navController;
 	CoreWebView2Controller? viewerController;
 	CoreWebView2Controller? titleController;
 	CoreWebView2? navWeb;
 	CoreWebView2? viewerWeb;
 	CoreWebView2? titleWeb;
+	LoadedDocument? currentDocument;
+	string currentFilePath = string.Empty;
+	string pendingFragment = string.Empty;
 	IntPtr handle;
 
 	// IMPORTANT: prevent GC
 	Native.WndProcDelegate? wndProcDelegate;
+
+	public WebView() {
+		workspaceRoot = Directory.GetCurrentDirectory();
+		baseRoot = Path.Combine(workspaceRoot, "mhtml");
+		offlineAssets = LoadOfflineAssetIndex(
+			Path.Combine(workspaceRoot, "assets", "mhtml-uuid.tsv"),
+			workspaceRoot
+		);
+	}
 
 	public IntPtr Handle => handle;
 
@@ -199,6 +215,7 @@ internal sealed class WebView : IDisposable {
 		viewerWeb = viewerController.CoreWebView2;
 		titleWeb = titleController.CoreWebView2;
 		ConfigureLocalMediaHost(viewerWeb);
+		viewerWeb.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
 
 		ResizeWebView();
 
@@ -216,6 +233,7 @@ internal sealed class WebView : IDisposable {
 		viewerWeb.NavigationCompleted += ViewerNavigationCompleted;
 		viewerWeb.NewWindowRequested += ViewerNewWindowRequested;
 		viewerWeb.WebMessageReceived += ViewerWebMessageReceived;
+		viewerWeb.WebResourceRequested += ViewerWebResourceRequested;
 
 		titleWeb.NavigateToString(LoadEmbedded(TitleBarRes));
 		await SetIcon($"data:{GetMime(IconRes)};base64,{Convert.ToBase64String(LoadEmbeddedBytes(IconRes))}");
@@ -253,7 +271,7 @@ internal sealed class WebView : IDisposable {
 	void ConfigureLocalMediaHost(CoreWebView2 web) {
 		web.SetVirtualHostNameToFolderMapping(
 			LocalMediaHost,
-			baseRoot,
+			workspaceRoot,
 			CoreWebView2HostResourceAccessKind.Allow
 		);
 	}
@@ -399,15 +417,19 @@ internal sealed class WebView : IDisposable {
 			await ToggleSidebar();
 			return;
 		}
+		if (IsDocumentResourceUrl(e.Uri)) return;
 		if (IsLocalMediaUrl(e.Uri)) return;
+		if (e.Uri.StartsWith("about:", StringComparison.OrdinalIgnoreCase)) return;
 		await OpenLink(e);
 	}
 	async void ViewerFrameNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e) {
+		if (IsDocumentResourceUrl(e.Uri)) return;
 		if (!IsLocalMediaUrl(e.Uri)) return;
 		e.Cancel = true;
 		await OpenLocalMedia(e.Uri);
 	}
 	async void ViewerNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e) {
+		if (IsDocumentResourceUrl(e.Uri)) return;
 		if (!IsLocalMediaUrl(e.Uri)) return;
 		e.Handled = true;
 		await OpenLocalMedia(e.Uri);
@@ -421,13 +443,26 @@ internal sealed class WebView : IDisposable {
 				isLoading = false;
 				return;
 			}
-			if (viewerWeb?.Source == null || !viewerWeb.Source.StartsWith("file:", StringComparison.OrdinalIgnoreCase)) return;
-			string path = new Uri(viewerWeb.Source).LocalPath;
-			string pathJson = JsonSerializer.Serialize(path, AppJsonContext.Default.String);
+			if (string.IsNullOrEmpty(currentFilePath)) return;
+			string pathJson = JsonSerializer.Serialize(currentFilePath, AppJsonContext.Default.String);
 			await navWeb!.ExecuteScriptAsync($"setActiveByPath({pathJson}); hideLoading();");
 			// await InjectUnrealCSS(); // style masih bug
 			await InjectGetTitle();
 			await InjectToggleButton();
+			if (!string.IsNullOrWhiteSpace(pendingFragment)) {
+				string fragment = pendingFragment;
+				pendingFragment = string.Empty;
+				string fragmentJson = JsonSerializer.Serialize(fragment, AppJsonContext.Default.String);
+				await viewerWeb!.ExecuteScriptAsync($@"
+					(() => {{
+						const raw = {fragmentJson};
+						const decoded = decodeURIComponent(raw);
+						const target = document.getElementById(decoded) || document.getElementById(raw);
+						if (target) target.scrollIntoView();
+						location.hash = raw;
+					}})();
+				");
+			}
 			await HideTitleLoading();
 			isLoading = false;
 			if (!isTitleInit) {
@@ -460,6 +495,9 @@ internal sealed class WebView : IDisposable {
 		return Uri.TryCreate(url, UriKind.Absolute, out var uri)
 			&& uri.Host.Equals(LocalMediaHost, StringComparison.OrdinalIgnoreCase);
 	}
+	bool IsDocumentResourceUrl(string url) {
+		return url.StartsWith($"https://{DocumentResourceHost}/cid/", StringComparison.OrdinalIgnoreCase);
+	}
 	async Task OpenLocalMedia(string url) {
 		if (!TryResolveLocalMediaPath(url, out string file)) {
 			await ShowError("Media file not found:\\n" + url);
@@ -474,8 +512,8 @@ internal sealed class WebView : IDisposable {
 
 		string relativePath = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/'))
 			.Replace('/', Path.DirectorySeparatorChar);
-		string fullPath = Path.GetFullPath(Path.Combine(baseRoot, relativePath));
-		string rootPath = Path.GetFullPath(baseRoot);
+		string fullPath = Path.GetFullPath(Path.Combine(workspaceRoot, relativePath));
+		string rootPath = Path.GetFullPath(workspaceRoot);
 		if (!rootPath.EndsWith(Path.DirectorySeparatorChar)) rootPath += Path.DirectorySeparatorChar;
 		if (!fullPath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase)) return false;
 		if (!File.Exists(fullPath)) return false;
@@ -484,11 +522,10 @@ internal sealed class WebView : IDisposable {
 		return true;
 	}
 	async Task OpenMhtml(string file, string fragment) {
-		string url = new Uri(file).AbsoluteUri;
-		if (!string.IsNullOrWhiteSpace(fragment)) {
-			url += "#" + Uri.EscapeDataString(fragment);
-		}
-		viewerWeb!.Navigate(url);
+		currentFilePath = file;
+		pendingFragment = fragment;
+		currentDocument = documentCache.GetOrAdd(file, LoadDocument);
+		viewerWeb!.NavigateToString(currentDocument.Html);
 	}
 	async Task ShowError(string message) {
 		string json = JsonSerializer.Serialize(message, AppJsonContext.Default.String);
@@ -660,10 +697,284 @@ internal sealed class WebView : IDisposable {
 		string[] parts = name.Split('.');
 		return int.TryParse(parts[0], out int n) ? n : int.MaxValue;
 	}
+	void ViewerWebResourceRequested(object? sender, CoreWebView2WebResourceRequestedEventArgs e) {
+		if (viewerWeb == null || currentDocument == null) return;
+		if (!TryResolveDocumentResource(e.Request.Uri, out var resource)) return;
+
+		string contentType = resource.ContentType;
+		string headers = $"Content-Type: {contentType}\r\nAccess-Control-Allow-Origin: *";
+		Stream stream = resource.FilePath != null
+			? new FileStream(resource.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan)
+			: new MemoryStream(resource.Bytes!, writable: false);
+
+		e.Response = viewerWeb.Environment.CreateWebResourceResponse(stream, 200, "OK", headers);
+	}
+	bool TryResolveDocumentResource(string requestUrl, out ResourceEntry resource) {
+		resource = default!;
+		var document = currentDocument;
+		if (document == null) return false;
+
+		int fragmentIndex = requestUrl.IndexOf('#');
+		if (fragmentIndex >= 0) requestUrl = requestUrl[..fragmentIndex];
+
+		string cidPrefix = $"https://{DocumentResourceHost}/cid/";
+		if (requestUrl.StartsWith(cidPrefix, StringComparison.OrdinalIgnoreCase)) {
+			string cid = Uri.UnescapeDataString(requestUrl[cidPrefix.Length..]);
+			return document.ResourcesByCid.TryGetValue(cid, out resource!);
+		}
+
+		return document.ResourcesByUrl.TryGetValue(requestUrl, out resource!);
+	}
+	LoadedDocument LoadDocument(string file) {
+		string content = File.ReadAllText(file);
+		string? boundary = TryExtractBoundary(content);
+		if (string.IsNullOrWhiteSpace(boundary)) {
+			throw new InvalidOperationException("Invalid MHTML: multipart boundary not found.");
+		}
+
+		string marker = "--" + boundary;
+		string[] segments = content.Split(marker, StringSplitOptions.None);
+		if (segments.Length < 2) {
+			throw new InvalidOperationException("Invalid MHTML: no multipart sections found.");
+		}
+
+		var resourcesByUrl = new Dictionary<string, ResourceEntry>(StringComparer.Ordinal);
+		var resourcesByCid = new Dictionary<string, ResourceEntry>(StringComparer.OrdinalIgnoreCase);
+		string? rootHtml = null;
+
+		for (int i = 1; i < segments.Length; i++) {
+			string segment = segments[i];
+			if (segment.StartsWith("--", StringComparison.Ordinal)) break;
+
+			segment = segment.TrimStart('\r', '\n');
+			if (string.IsNullOrWhiteSpace(segment)) continue;
+
+			MhtmlPart part = ParsePart(segment);
+			if (rootHtml == null && part.ContentType.StartsWith("text/html", StringComparison.OrdinalIgnoreCase)) {
+				rootHtml = RewriteCidUrls(DecodePartText(part.Body, part.TransferEncoding, part.ContentType));
+			}
+
+			ResourceEntry? resource = CreateResourceEntry(part, offlineAssets);
+			if (resource == null) continue;
+
+			if (!string.IsNullOrWhiteSpace(part.ContentLocation)) {
+				string location = part.ContentLocation.Trim();
+				if (!location.StartsWith("cid:", StringComparison.OrdinalIgnoreCase) && !resourcesByUrl.ContainsKey(location)) {
+					resourcesByUrl[location] = resource;
+				}
+
+				string cidFromLocation = NormalizeCidToken(location);
+				if (!string.IsNullOrEmpty(cidFromLocation) && !resourcesByCid.ContainsKey(cidFromLocation)) {
+					resourcesByCid[cidFromLocation] = resource;
+				}
+			}
+
+			if (!string.IsNullOrWhiteSpace(part.ContentId)) {
+				string cid = NormalizeCidToken(part.ContentId);
+				if (!string.IsNullOrEmpty(cid) && !resourcesByCid.ContainsKey(cid)) {
+					resourcesByCid[cid] = resource;
+				}
+			}
+		}
+
+		if (string.IsNullOrWhiteSpace(rootHtml)) {
+			throw new InvalidOperationException("Invalid MHTML: root HTML part not found.");
+		}
+
+		return new LoadedDocument(rootHtml, resourcesByUrl, resourcesByCid);
+	}
+	static string RewriteCidUrls(string html) {
+		return Regex.Replace(
+			html,
+			@"cid:([^\s""'<>())]+)",
+			match => BuildLocalCidUrl(match.Groups[1].Value),
+			RegexOptions.IgnoreCase
+		);
+	}
+	static string BuildLocalCidUrl(string cid) {
+		return $"https://{DocumentResourceHost}/cid/{Uri.EscapeDataString(NormalizeCidToken(cid))}";
+	}
+	static string NormalizeCidToken(string cid) {
+		if (string.IsNullOrWhiteSpace(cid)) return string.Empty;
+		cid = cid.Trim();
+		if (cid.StartsWith("cid:", StringComparison.OrdinalIgnoreCase)) cid = cid[4..];
+		if (cid.StartsWith("<", StringComparison.Ordinal) && cid.EndsWith(">", StringComparison.Ordinal) && cid.Length > 2) {
+			cid = cid[1..^1];
+		}
+		return cid;
+	}
+	static string? TryExtractBoundary(string content) {
+		var match = Regex.Match(content, "boundary=\"([^\"]+)\"", RegexOptions.IgnoreCase);
+		return match.Success ? match.Groups[1].Value : null;
+	}
+	static MhtmlPart ParsePart(string segment) {
+		int separatorLength = 4;
+		int separator = segment.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+		if (separator < 0) {
+			separator = segment.IndexOf("\n\n", StringComparison.Ordinal);
+			separatorLength = 2;
+		}
+
+		string headerText;
+		string body;
+		if (separator < 0) {
+			headerText = segment.Trim();
+			body = string.Empty;
+		} else {
+			headerText = segment[..separator].TrimEnd();
+			body = segment[(separator + separatorLength)..];
+		}
+
+		var headers = ParseHeaders(headerText);
+		headers.TryGetValue("Content-Type", out string? contentType);
+		headers.TryGetValue("Content-Transfer-Encoding", out string? transferEncoding);
+		headers.TryGetValue("Content-Location", out string? contentLocation);
+		headers.TryGetValue("Content-ID", out string? contentId);
+
+		return new MhtmlPart(
+			contentType ?? "application/octet-stream",
+			transferEncoding ?? "8bit",
+			contentLocation ?? string.Empty,
+			contentId ?? string.Empty,
+			body
+		);
+	}
+	static Dictionary<string, string> ParseHeaders(string headerText) {
+		var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		string currentName = string.Empty;
+
+		foreach (string rawLine in headerText.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n')) {
+			if (string.IsNullOrWhiteSpace(rawLine)) continue;
+
+			if ((rawLine[0] == ' ' || rawLine[0] == '\t') && currentName.Length > 0) {
+				headers[currentName] += " " + rawLine.Trim();
+				continue;
+			}
+
+			int colonIndex = rawLine.IndexOf(':');
+			if (colonIndex <= 0) continue;
+
+			currentName = rawLine[..colonIndex].Trim();
+			headers[currentName] = rawLine[(colonIndex + 1)..].Trim();
+		}
+
+		return headers;
+	}
+	static ResourceEntry? CreateResourceEntry(MhtmlPart part, Dictionary<string, OfflineAsset> offlineAssets) {
+		if (HasBody(part.Body)) {
+			return new ResourceEntry(part.ContentType, DecodePartBytes(part.Body, part.TransferEncoding, part.ContentType), null);
+		}
+
+		if (!string.IsNullOrWhiteSpace(part.ContentLocation) &&
+			offlineAssets.TryGetValue(part.ContentLocation.Trim(), out var asset)) {
+			return new ResourceEntry(asset.ContentType, null, asset.FilePath);
+		}
+
+		return null;
+	}
+	static bool HasBody(string body) {
+		return !string.IsNullOrWhiteSpace(body);
+	}
+	static byte[] DecodePartBytes(string body, string transferEncoding, string contentType) {
+		string normalizedEncoding = transferEncoding.Trim().ToLowerInvariant();
+		return normalizedEncoding switch {
+			"base64" => DecodeBase64Bytes(body),
+			"quoted-printable" => DecodeQuotedPrintableToBytes(body),
+			_ => Encoding.UTF8.GetBytes(body)
+		};
+	}
+	static string DecodePartText(string body, string transferEncoding, string contentType) {
+		return Encoding.UTF8.GetString(DecodePartBytes(body, transferEncoding, contentType));
+	}
+	static byte[] DecodeQuotedPrintableToBytes(string input) {
+		using var ms = new MemoryStream(input.Length);
+
+		for (int i = 0; i < input.Length; i++) {
+			char ch = input[i];
+			if (ch != '=') {
+				ms.WriteByte((byte)ch);
+				continue;
+			}
+
+			if (i + 1 < input.Length && input[i + 1] == '\r') {
+				i++;
+				if (i + 1 < input.Length && input[i + 1] == '\n') i++;
+				continue;
+			}
+			if (i + 1 < input.Length && input[i + 1] == '\n') {
+				i++;
+				continue;
+			}
+			if (i + 2 < input.Length &&
+				IsHex(input[i + 1]) &&
+				IsHex(input[i + 2])) {
+				byte value = (byte)((HexToInt(input[i + 1]) << 4) | HexToInt(input[i + 2]));
+				ms.WriteByte(value);
+				i += 2;
+				continue;
+			}
+
+			ms.WriteByte((byte)'=');
+		}
+
+		return ms.ToArray();
+	}
+	static bool IsHex(char c) {
+		return (c >= '0' && c <= '9')
+			|| (c >= 'a' && c <= 'f')
+			|| (c >= 'A' && c <= 'F');
+	}
+	static int HexToInt(char c) {
+		return c switch {
+			>= '0' and <= '9' => c - '0',
+			>= 'a' and <= 'f' => c - 'a' + 10,
+			>= 'A' and <= 'F' => c - 'A' + 10,
+			_ => 0
+		};
+	}
+	static byte[] DecodeBase64Bytes(string input) {
+		string normalized = new(input.Where(c => !char.IsWhiteSpace(c)).ToArray());
+		return Convert.FromBase64String(normalized);
+	}
+	static Dictionary<string, OfflineAsset> LoadOfflineAssetIndex(string path, string rootDirectory) {
+		var map = new Dictionary<string, OfflineAsset>(StringComparer.Ordinal);
+		if (!File.Exists(path)) return map;
+
+		foreach (string line in File.ReadLines(path).Skip(1)) {
+			if (string.IsNullOrWhiteSpace(line)) continue;
+
+			string[] parts = line.Split('\t');
+			if (parts.Length < 6) continue;
+
+			string link = parts[0].Trim();
+			string relativePath = parts[1].Trim().Replace('/', Path.DirectorySeparatorChar);
+			string contentType = parts[2].Trim();
+			string fullPath = Path.GetFullPath(Path.Combine(rootDirectory, relativePath));
+
+			map[link] = new OfflineAsset(fullPath, contentType);
+		}
+
+		return map;
+	}
 	public void Dispose() {
 		viewerController?.Close();
 		navController?.Close();
+		titleController?.Close();
 	}
+	sealed record OfflineAsset(string FilePath, string ContentType);
+	sealed record LoadedDocument(
+		string Html,
+		Dictionary<string, ResourceEntry> ResourcesByUrl,
+		Dictionary<string, ResourceEntry> ResourcesByCid
+	);
+	sealed record ResourceEntry(string ContentType, byte[]? Bytes, string? FilePath);
+	sealed record MhtmlPart(
+		string ContentType,
+		string TransferEncoding,
+		string ContentLocation,
+		string ContentId,
+		string Body
+	);
 	sealed class NaturalComparer : IComparer<string> {
 		public int Compare(string? a, string? b) {
 			string[] aa = Regex.Split(a ?? "", @"(\d+)");
