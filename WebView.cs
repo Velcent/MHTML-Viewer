@@ -46,6 +46,7 @@ internal sealed class WebView : IDisposable {
 	LoadedDocument? currentDocument;
 	string currentFilePath = string.Empty;
 	string pendingFragment = string.Empty;
+	string pendingLocalHtmlNavigationPath = string.Empty;
 	readonly List<NavigationEntry> navigationHistory = new();
 	int navigationIndex = -1;
 	IntPtr handle;
@@ -396,7 +397,7 @@ internal sealed class WebView : IDisposable {
 				case "open":
 					string fullPath = msg.RootElement.GetProperty("path").GetString() ?? "";
 					if (File.Exists(fullPath))
-						await OpenMhtml(fullPath, "");
+						await OpenDocument(fullPath, "");
 					else
 						await ShowError("File not found:\\n" + fullPath);
 					break;
@@ -470,6 +471,19 @@ internal sealed class WebView : IDisposable {
 		}
 	}
 	async Task OpenLink(CoreWebView2NavigationStartingEventArgs e) {
+		if (TryResolveLocalHtml(e.Uri, out string htmlFile, out string htmlFragment)) {
+			if (htmlFragment.Length == 0 &&
+				htmlFile.Equals(pendingLocalHtmlNavigationPath, StringComparison.OrdinalIgnoreCase)) {
+				pendingLocalHtmlNavigationPath = string.Empty;
+				return;
+			}
+			if (await TryNavigateCurrentDocumentFragment(htmlFile, htmlFragment)) {
+				e.Cancel = true;
+				return;
+			}
+			await OpenHtml(htmlFile, htmlFragment, navigate: false);
+			return;
+		}
 		if (!e.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase)) {
 			isLoading = true;
 			await navWeb!.ExecuteScriptAsync("showLoading()");
@@ -478,9 +492,14 @@ internal sealed class WebView : IDisposable {
 		e.Cancel = true;
 		if (!TryResolveMhtml(e.Uri, out string file, out string fragment)) return;
 		if (await TryNavigateCurrentDocumentFragment(file, fragment)) return;
-		await OpenMhtml(file, fragment);
+		await OpenDocument(file, fragment);
 	}
 	async Task OpenLink(string url) {
+		if (TryResolveLocalHtml(url, out string htmlFile, out string htmlFragment)) {
+			if (await TryNavigateCurrentDocumentFragment(htmlFile, htmlFragment)) return;
+			await OpenHtml(htmlFile, htmlFragment);
+			return;
+		}
 		if (!url.StartsWith("http", StringComparison.OrdinalIgnoreCase)) {
 			isLoading = true;
 			await navWeb!.ExecuteScriptAsync("showLoading()");
@@ -488,7 +507,7 @@ internal sealed class WebView : IDisposable {
 		}
 		if (!TryResolveMhtml(url, out string file, out string fragment)) return;
 		if (await TryNavigateCurrentDocumentFragment(file, fragment)) return;
-		await OpenMhtml(file, fragment);
+		await OpenDocument(file, fragment);
 	}
 	async Task<bool> TryNavigateCurrentDocumentFragment(string file, string fragment, bool addHistory = true) {
 		if (!file.Equals(currentFilePath, StringComparison.OrdinalIgnoreCase)) return false;
@@ -549,6 +568,53 @@ internal sealed class WebView : IDisposable {
 		file = fullPath;
 		return true;
 	}
+	bool TryResolveLocalHtml(string url, out string file, out string fragment) {
+		file = string.Empty;
+		fragment = string.Empty;
+		if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
+		if (!uri.IsFile) return false;
+
+		string fullPath = Path.GetFullPath(uri.LocalPath);
+		if (!IsHtmlFile(fullPath)) return false;
+		if (!IsPathInsideRoot(fullPath, workspaceRoot)) return false;
+		if (!File.Exists(fullPath)) return false;
+
+		file = fullPath;
+		fragment = uri.Fragment.Length > 0 ? uri.Fragment[1..] : string.Empty;
+		return true;
+	}
+	static bool IsHtmlFile(string file) {
+		string ext = Path.GetExtension(file);
+		return ext.Equals(".html", StringComparison.OrdinalIgnoreCase)
+			|| ext.Equals(".htm", StringComparison.OrdinalIgnoreCase);
+	}
+	static bool IsPathInsideRoot(string path, string root) {
+		string fullPath = Path.GetFullPath(path);
+		string rootPath = Path.GetFullPath(root);
+		if (!rootPath.EndsWith(Path.DirectorySeparatorChar)) rootPath += Path.DirectorySeparatorChar;
+		return fullPath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase);
+	}
+	async Task OpenDocument(string file, string fragment, bool addHistory = true) {
+		if (IsHtmlFile(file)) {
+			await OpenHtml(file, fragment, addHistory);
+			return;
+		}
+
+		await OpenMhtml(file, fragment, addHistory);
+	}
+	Task OpenHtml(string file, string fragment, bool addHistory = true, bool navigate = true) {
+		currentFilePath = file;
+		pendingFragment = fragment;
+		currentDocument = null;
+		State.Current.lastFile = file;
+		State.Save(State.Current);
+		if (addHistory) AddHistory(NavigationEntry.Document(file, fragment));
+		if (navigate) {
+			pendingLocalHtmlNavigationPath = file;
+			viewerWeb!.Navigate(new Uri(file).AbsoluteUri);
+		}
+		return Task.CompletedTask;
+	}
 	async Task OpenMhtml(string file, string fragment, bool addHistory = true) {
 		currentFilePath = file;
 		pendingFragment = fragment;
@@ -584,7 +650,7 @@ internal sealed class WebView : IDisposable {
 		}
 
 		if (await TryNavigateCurrentDocumentFragment(entry.FilePath, entry.Fragment, false)) return;
-		await OpenMhtml(entry.FilePath, entry.Fragment, false);
+		await OpenDocument(entry.FilePath, entry.Fragment, false);
 	}
 	async Task ShowError(string message) {
 		string json = JsonSerializer.Serialize(message, AppJsonContext.Default.String);
