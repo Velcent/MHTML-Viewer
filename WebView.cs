@@ -47,6 +47,7 @@ internal sealed class WebView : IDisposable {
 	string currentFilePath = string.Empty;
 	string pendingFragment = string.Empty;
 	string pendingLocalHtmlNavigationPath = string.Empty;
+	int documentNavigationVersion = 0;
 	readonly List<NavigationEntry> navigationHistory = new();
 	int navigationIndex = -1;
 	IntPtr handle;
@@ -545,7 +546,10 @@ internal sealed class WebView : IDisposable {
 			&& uri.Host.Equals(LocalMediaHost, StringComparison.OrdinalIgnoreCase);
 	}
 	bool IsDocumentResourceUrl(string url) {
-		return url.StartsWith($"https://{DocumentResourceHost}/cid/", StringComparison.OrdinalIgnoreCase);
+		if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
+		if (!uri.Host.Equals(DocumentResourceHost, StringComparison.OrdinalIgnoreCase)) return false;
+		return uri.AbsolutePath.StartsWith("/cid/", StringComparison.OrdinalIgnoreCase)
+			|| uri.AbsolutePath.StartsWith("/document/", StringComparison.OrdinalIgnoreCase);
 	}
 	async Task OpenLocalMedia(string url, bool addHistory = true) {
 		if (!TryResolveLocalMediaPath(url, out string file)) {
@@ -625,7 +629,11 @@ internal sealed class WebView : IDisposable {
 		State.Current.lastFile = file;
 		State.Save(State.Current);
 		if (addHistory) AddHistory(NavigationEntry.Document(file, fragment));
-		viewerWeb!.NavigateToString(currentDocument.Html);
+		viewerWeb!.Navigate(BuildDocumentRootUrl());
+	}
+	string BuildDocumentRootUrl() {
+		int version = ++documentNavigationVersion;
+		return $"https://{DocumentResourceHost}/document/{version}/index.html";
 	}
 	void AddHistory(NavigationEntry entry) {
 		if (navigationIndex >= 0 &&
@@ -968,6 +976,13 @@ internal sealed class WebView : IDisposable {
 		int fragmentIndex = requestUrl.IndexOf('#');
 		if (fragmentIndex >= 0) requestUrl = requestUrl[..fragmentIndex];
 
+		if (Uri.TryCreate(requestUrl, UriKind.Absolute, out var uri) &&
+			uri.Host.Equals(DocumentResourceHost, StringComparison.OrdinalIgnoreCase) &&
+			uri.AbsolutePath.StartsWith("/document/", StringComparison.OrdinalIgnoreCase)) {
+			resource = new ResourceEntry("text/html; charset=utf-8", document.HtmlBytes, null);
+			return true;
+		}
+
 		string cidPrefix = $"https://{DocumentResourceHost}/cid/";
 		if (requestUrl.StartsWith(cidPrefix, StringComparison.OrdinalIgnoreCase)) {
 			string cid = Uri.UnescapeDataString(requestUrl[cidPrefix.Length..]);
@@ -1032,7 +1047,7 @@ internal sealed class WebView : IDisposable {
 			throw new InvalidOperationException("Invalid MHTML: root HTML part not found.");
 		}
 
-		return new LoadedDocument(rootHtml, resourcesByUrl, resourcesByCid);
+		return new LoadedDocument(rootHtml, Encoding.UTF8.GetBytes(rootHtml), resourcesByUrl, resourcesByCid);
 	}
 	static string RewriteCidUrls(string html) {
 		return Regex.Replace(
@@ -1221,6 +1236,7 @@ internal sealed class WebView : IDisposable {
 	);
 	sealed record LoadedDocument(
 		string Html,
+		byte[] HtmlBytes,
 		Dictionary<string, ResourceEntry> ResourcesByUrl,
 		Dictionary<string, ResourceEntry> ResourcesByCid
 	);
