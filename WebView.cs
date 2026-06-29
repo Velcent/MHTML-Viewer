@@ -48,6 +48,8 @@ internal sealed class WebView : IDisposable {
 	string pendingFragment = string.Empty;
 	string pendingLocalHtmlNavigationPath = string.Empty;
 	int documentNavigationVersion = 0;
+	List<Node> viewerTree = new();
+	readonly Dictionary<string, string> titleCache = new(StringComparer.OrdinalIgnoreCase);
 	readonly List<NavigationEntry> navigationHistory = new();
 	int navigationIndex = -1;
 	IntPtr handle;
@@ -266,6 +268,8 @@ internal sealed class WebView : IDisposable {
 		}
 
 		List<Node> tree = viewerCache.Tree;
+		viewerTree = tree;
+		titleCache.Clear();
 		string treeJson = JsonSerializer.Serialize(tree, AppJsonContext.Default.ListNode);
 		string firstJson = JsonSerializer.Serialize(first, AppJsonContext.Default.String);
 		string stateJson = JsonSerializer.Serialize(State.Current, AppJsonContext.Default.STATE);
@@ -299,18 +303,85 @@ internal sealed class WebView : IDisposable {
 	}
 	async Task GetTitleLoop() {
 		while (true) {
-			if (isTitleInit) await viewerWeb!.ExecuteScriptAsync($"getTitle()");
+			if (isTitleInit) await UpdateJsTitle();
 			await Task.Delay(200);
 			if (!isTitleInit) continue;
 			if (isLoading) isTitleUpdated = true;
 			if (!isTitleUpdated) {
-				await SetTitle(Path.GetFileNameWithoutExtension(FindFirstFile(baseRoot)), false);
+				await SetTitle(BuildTitle(currentFilePath), false);
 			}
 			isTitleUpdated = false;
 		}
 	}
 	async Task SetTitle(string title, bool isAnimate = true) {
-		await titleWeb!.ExecuteScriptAsync($"setTitle('{title}', {isAnimate.ToString().ToLower()})");
+		string titleJson = JsonSerializer.Serialize(title, AppJsonContext.Default.String);
+		await titleWeb!.ExecuteScriptAsync($"setTitle({titleJson}, {isAnimate.ToString().ToLowerInvariant()})");
+	}
+	async Task UpdateJsTitle(bool animate = true) {
+		try {
+			string animateJson = animate.ToString().ToLowerInvariant();
+			await viewerWeb!.ExecuteScriptAsync($"if (typeof getTitle === 'function') getTitle({animateJson});");
+		} catch {
+		}
+	}
+	string BuildTitle(string file) {
+		if (!string.IsNullOrWhiteSpace(file) &&
+			titleCache.TryGetValue(file, out string? cachedTitle)) {
+			return cachedTitle;
+		}
+
+		string title;
+		if (!string.IsNullOrWhiteSpace(file) && FindTitleNodeChain(viewerTree, file, out var chain)) {
+			title = string.Join(" \u2b9e ", chain
+				.Where(node => !string.IsNullOrWhiteSpace(node.name))
+				.Select(node => BuildTitleLink(CleanTreeTitle(node.name), node.path, file)));
+		} else {
+			string fallback = !string.IsNullOrWhiteSpace(file)
+				? Path.GetFileNameWithoutExtension(file)
+				: Path.GetFileNameWithoutExtension(FindFirstFile(baseRoot));
+			title = WebUtility.HtmlEncode(CleanTreeTitle(fallback));
+		}
+
+		if (!string.IsNullOrWhiteSpace(file)) titleCache[file] = title;
+		return title;
+	}
+	static string BuildTitleLink(string title, string path, string currentFile) {
+		string encodedTitle = WebUtility.HtmlEncode(title);
+		if (string.IsNullOrWhiteSpace(path)) return encodedTitle;
+
+		string href = path.Equals(currentFile, StringComparison.OrdinalIgnoreCase)
+			? "#"
+			: new Uri(path).AbsoluteUri;
+		return $"<span data-link=\"true\" href=\"{WebUtility.HtmlEncode(href)}\">{encodedTitle}</span>";
+	}
+	static string CleanTreeTitle(string title) {
+		return Regex.Replace(title, @"^\d+(\.\d+)*\.?\s*", "");
+	}
+	static bool FindTitleNodeChain(List<Node> nodes, string file, out List<Node> chain) {
+		List<Node>? best = null;
+		var current = new List<Node>();
+		foreach (var node in nodes) {
+			FindNodeChain(node, file, current, ref best);
+		}
+
+		chain = best ?? new List<Node>();
+		return best != null;
+	}
+	static void FindNodeChain(Node node, string file, List<Node> current, ref List<Node>? best) {
+		current.Add(node);
+		if (!string.IsNullOrWhiteSpace(node.path) &&
+			node.path.Equals(file, StringComparison.OrdinalIgnoreCase) &&
+			(best == null || current.Count > best.Count)) {
+			best = current.ToList();
+		}
+
+		if (node.children != null) {
+			foreach (var child in node.children) {
+				FindNodeChain(child, file, current, ref best);
+			}
+		}
+
+		current.RemoveAt(current.Count - 1);
 	}
 	async Task SetIcon(string path) {
 		string url = new Uri(path).AbsoluteUri;
@@ -352,6 +423,7 @@ internal sealed class WebView : IDisposable {
 			case "SetTitle":
 				var data = json.RootElement.GetProperty("data").GetString();
 				var anim = json.RootElement.GetProperty("anim").GetBoolean();
+				isTitleUpdated = true;
 				await SetTitle(data!, anim);
 				break;
 			case "UpdateTitle":
@@ -467,24 +539,32 @@ internal sealed class WebView : IDisposable {
 			await HideTitleLoading();
 			isLoading = false;
 			if (!isTitleInit) {
-				await viewerWeb!.ExecuteScriptAsync($"getTitle(false)");
 				isTitleInit = true;
+				await UpdateJsTitle(false);
 			}
 		} catch {
 		}
 	}
 	async Task OpenLink(CoreWebView2NavigationStartingEventArgs e) {
-		if (TryResolveLocalHtml(e.Uri, out string htmlFile, out string htmlFragment)) {
-			if (htmlFragment.Length == 0 &&
-				htmlFile.Equals(pendingLocalHtmlNavigationPath, StringComparison.OrdinalIgnoreCase)) {
+		if (TryResolveLocalDocument(e.Uri, out string localFile, out string localFragment)) {
+			if (IsHtmlFile(localFile) &&
+				localFragment.Length == 0 &&
+				localFile.Equals(pendingLocalHtmlNavigationPath, StringComparison.OrdinalIgnoreCase)) {
 				pendingLocalHtmlNavigationPath = string.Empty;
 				return;
 			}
-			if (await TryNavigateCurrentDocumentFragment(htmlFile, htmlFragment)) {
+
+			if (await TryNavigateCurrentDocumentFragment(localFile, localFragment)) {
 				e.Cancel = true;
 				return;
 			}
-			await OpenHtml(htmlFile, htmlFragment, navigate: false);
+
+			if (IsHtmlFile(localFile)) {
+				await OpenHtml(localFile, localFragment, navigate: false);
+			} else {
+				e.Cancel = true;
+				await OpenMhtml(localFile, localFragment);
+			}
 			return;
 		}
 		if (!e.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase)) {
@@ -498,9 +578,9 @@ internal sealed class WebView : IDisposable {
 		await OpenDocument(file, fragment);
 	}
 	async Task OpenLink(string url) {
-		if (TryResolveLocalHtml(url, out string htmlFile, out string htmlFragment)) {
-			if (await TryNavigateCurrentDocumentFragment(htmlFile, htmlFragment)) return;
-			await OpenHtml(htmlFile, htmlFragment);
+		if (TryResolveLocalDocument(url, out string localFile, out string localFragment)) {
+			if (await TryNavigateCurrentDocumentFragment(localFile, localFragment)) return;
+			await OpenDocument(localFile, localFragment);
 			return;
 		}
 		if (!url.StartsWith("http", StringComparison.OrdinalIgnoreCase)) {
@@ -574,14 +654,14 @@ internal sealed class WebView : IDisposable {
 		file = fullPath;
 		return true;
 	}
-	bool TryResolveLocalHtml(string url, out string file, out string fragment) {
+	bool TryResolveLocalDocument(string url, out string file, out string fragment) {
 		file = string.Empty;
 		fragment = string.Empty;
 		if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
 		if (!uri.IsFile) return false;
 
 		string fullPath = Path.GetFullPath(uri.LocalPath);
-		if (!IsHtmlFile(fullPath)) return false;
+		if (!IsDocumentFile(fullPath)) return false;
 		if (!IsPathInsideRoot(fullPath, workspaceRoot)) return false;
 		if (!File.Exists(fullPath)) return false;
 
@@ -593,6 +673,12 @@ internal sealed class WebView : IDisposable {
 		string ext = Path.GetExtension(file);
 		return ext.Equals(".html", StringComparison.OrdinalIgnoreCase)
 			|| ext.Equals(".htm", StringComparison.OrdinalIgnoreCase);
+	}
+	static bool IsDocumentFile(string file) {
+		string ext = Path.GetExtension(file);
+		return IsHtmlFile(file)
+			|| ext.Equals(".mhtml", StringComparison.OrdinalIgnoreCase)
+			|| ext.Equals(".mht", StringComparison.OrdinalIgnoreCase);
 	}
 	static bool IsPathInsideRoot(string path, string root) {
 		string fullPath = Path.GetFullPath(path);
