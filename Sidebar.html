@@ -101,7 +101,6 @@
 			min-height: 32px;
 			padding: 7px 10px;
 			border-radius: 6px;
-			cursor: pointer;
 			display: flex;
 			gap: 8px;
 			align-items: flex-start;
@@ -119,16 +118,31 @@
 
 		.arrow {
 			width: 12px;
-			padding-top: 5px;
-			display: inline-block;
+			height: 18px;
+			margin-top: 2px;
+			padding: 0;
+			flex: 0 0 12px;
 			text-align: center;
 			font-family: Arial;
 			font-size: 9px;
+			line-height: 18px;
+			color: inherit;
+			background: transparent;
+			border: 0;
+		}
+
+		.arrow-button {
+			cursor: pointer;
+		}
+
+		.arrow-button:hover {
+			color: #fff;
 		}
 
 		.title {
 			min-width: 0;
 			overflow-wrap: anywhere;
+			cursor: pointer;
 		}
 
 		.children {
@@ -251,17 +265,17 @@
 		let resizing = false;
 		let collapsed = false;
 		let sidebarWidth = 340;
+		const ARROW_CLOSED = "\u2b9e";
+		const ARROW_OPEN = "\u2b9f";
 
 		function initTree(data, firstPath, state) {
 			renderTree(data);
-			expandRoot();
-			const target = state.lastFile || firstPath;
-			if (target) {
-				const node = findNodeByPath(target);
-				if (node  && !node.classList.contains('active')) {
-					setActive(node);
-					openFile(target);
-				}
+			const lastNode = state.lastFile ? findNodeByPath(state.lastFile) : null;
+			const target = lastNode ? state.lastFile : firstPath;
+			const node = lastNode || (firstPath ? findNodeByPath(firstPath) : null);
+			if (target && node && !node.classList.contains('active')) {
+				setInitialActive(node);
+				openFile(target);
 			}
 			setCollapsed(state.collapsed);			
 		}
@@ -293,36 +307,36 @@
 			const row = document.createElement("div");
 			row.className = "row";
 
-			const arrow = document.createElement("span");
-			arrow.className = "arrow";
-			arrow.textContent = (node.children && node.children.length) ? "⮞" : "";
+			const hasChildren = node.children && node.children.length;
+			const arrow = document.createElement(hasChildren ? "button" : "span");
+			arrow.className = hasChildren ? "arrow arrow-button" : "arrow arrow-placeholder";
+			arrow.textContent = hasChildren ? ARROW_CLOSED : "";
+			if (hasChildren) {
+				arrow.type = "button";
+				arrow.title = "Expand/collapse";
+			}
 
 			const title = document.createElement("span");
 			title.className = "title";
 			title.textContent = node.name.replace(/^\d+(\.\d+)*\.?\s*/, "");
+			title.onclick = () => {
+				if (!node.path || item.classList.contains('active')) return;
+				setActive(item);
+				openFile(node.path);
+			};
 
 			row.appendChild(arrow);
 			row.appendChild(title);
 			item.appendChild(row);
 
-			if (node.children && node.children.length) {
+			if (hasChildren) {
 				const children = document.createElement("div");
 				children.className = "children";
 				node.children.forEach(c => children.appendChild(createNode(c)));
 				item.appendChild(children);
-				row.onclick = () => {
-					item.classList.toggle("open");
-					arrow.textContent = item.classList.contains("open") ? "⮟" : "⮞";
-					if (node.path && !item.classList.contains('active')) {
-						setActive(item);
-						openFile(node.path);
-					}
-				};
-			} else {
-				row.onclick = () => {
-					if(item.classList.contains('active')) return;
-					setActive(item);
-					openFile(node.path);
+				arrow.onclick = e => {
+					e.stopPropagation();
+					toggleNode(item, arrow);
 				};
 			}
 			return item;
@@ -397,6 +411,22 @@
 			el.scrollIntoView({ block: "nearest" });
 		}
 
+		function toggleNode(item, arrow) {
+			item.classList.toggle("open");
+			setArrowState(item, arrow);
+		}
+
+		function setArrowState(item, arrow) {
+			if (arrow && item.querySelector(":scope > .children")) {
+				arrow.textContent = item.classList.contains("open") ? ARROW_OPEN : ARROW_CLOSED;
+			}
+		}
+
+		function setInitialActive(el) {
+			document.querySelectorAll(".item").forEach(i => i.classList.remove("active"));
+			el.classList.add("active");
+		}
+
 		function findNodeByPath(path) {
 			const lower = path.toLowerCase();
 			for (const node of document.querySelectorAll(".item")) {
@@ -404,14 +434,6 @@
 				if (p && p.toLowerCase() === lower) return node;
 			}
 			return null;
-		}
-
-		function expandRoot() {
-			document.querySelectorAll("#tree > .item").forEach(item => {
-				item.classList.add("open");
-				const arrow = item.querySelector(".arrow");
-				if (arrow && item.querySelector(":scope > .children")) arrow.textContent = "⮟";
-			});
 		}
 
 		const loadingOverlay = document.getElementById("loadingOverlay");
@@ -431,9 +453,8 @@
 					el.style.display = "";
 					el.classList.remove("open");
 					const a = el.querySelector(":scope > .row .arrow");
-					if (a && el.querySelector(":scope > .children")) a.textContent = "⮞";
+					setArrowState(el, a);
 				});
-				expandRoot();
 				const active = document.querySelector(".item.active");
 				if (active) {
 					expandParents(active);
@@ -452,7 +473,7 @@
 							p.style.display = "";
 							p.classList.add("open");
 							const a = p.querySelector(":scope > .row .arrow");
-							if (a) a.textContent = "⮟";
+							setArrowState(p, a);
 						}
 						p = p.parentElement;
 					}
@@ -467,7 +488,7 @@
 		function openNode(item) {
 			item.classList.add("open");
 			const a = item.querySelector(":scope > .row .arrow");
-			if (a && item.querySelector(":scope > .children")) a.textContent = "⮟";
+			setArrowState(item, a);
 		}
 
 		function expandParents(node) {
