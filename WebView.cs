@@ -44,6 +44,8 @@ internal sealed class WebView : IDisposable {
 	LoadedDocument? currentDocument;
 	string currentFilePath = string.Empty;
 	string pendingFragment = string.Empty;
+	readonly List<NavigationEntry> navigationHistory = new();
+	int navigationIndex = -1;
 	IntPtr handle;
 
 	// IMPORTANT: prevent GC
@@ -392,12 +394,10 @@ internal sealed class WebView : IDisposable {
 						await ShowError("File not found:\\n" + fullPath);
 					break;
 				case "back":
-					if (viewerWeb!.CanGoBack) 
-						viewerWeb.GoBack();
+					await NavigateHistory(-1);
 					break;
 				case "forward":
-					if (viewerWeb!.CanGoForward)
-						viewerWeb.GoForward();
+					await NavigateHistory(1);
 					break;
 				case "resizeSidebar":
 					int requestedWidth = msg.RootElement.GetProperty("width").GetInt32();
@@ -488,6 +488,7 @@ internal sealed class WebView : IDisposable {
 		if (!file.Equals(currentFilePath, StringComparison.OrdinalIgnoreCase)) return false;
 		if (viewerWeb == null) return false;
 
+		AddHistory(NavigationEntry.Document(file, fragment));
 		await NavigateToFragment(fragment);
 		return true;
 	}
@@ -518,11 +519,12 @@ internal sealed class WebView : IDisposable {
 	bool IsDocumentResourceUrl(string url) {
 		return url.StartsWith($"https://{DocumentResourceHost}/cid/", StringComparison.OrdinalIgnoreCase);
 	}
-	async Task OpenLocalMedia(string url) {
+	async Task OpenLocalMedia(string url, bool addHistory = true) {
 		if (!TryResolveLocalMediaPath(url, out string file)) {
 			await ShowError("Media file not found:\\n" + url);
 			return;
 		}
+		if (addHistory) AddHistory(NavigationEntry.Media(url));
 		viewerWeb!.Navigate(url);
 	}
 	bool TryResolveLocalMediaPath(string url, out string file) {
@@ -541,11 +543,41 @@ internal sealed class WebView : IDisposable {
 		file = fullPath;
 		return true;
 	}
-	async Task OpenMhtml(string file, string fragment) {
+	async Task OpenMhtml(string file, string fragment, bool addHistory = true) {
 		currentFilePath = file;
 		pendingFragment = fragment;
 		currentDocument = documentCache.GetOrAdd(file, LoadDocument);
+		State.Current.lastFile = file;
+		State.Save(State.Current);
+		if (addHistory) AddHistory(NavigationEntry.Document(file, fragment));
 		viewerWeb!.NavigateToString(currentDocument.Html);
+	}
+	void AddHistory(NavigationEntry entry) {
+		if (navigationIndex >= 0 &&
+			navigationIndex < navigationHistory.Count &&
+			navigationHistory[navigationIndex].Equals(entry)) {
+			return;
+		}
+
+		if (navigationIndex < navigationHistory.Count - 1) {
+			navigationHistory.RemoveRange(navigationIndex + 1, navigationHistory.Count - navigationIndex - 1);
+		}
+
+		navigationHistory.Add(entry);
+		navigationIndex = navigationHistory.Count - 1;
+	}
+	async Task NavigateHistory(int delta) {
+		int nextIndex = navigationIndex + delta;
+		if (nextIndex < 0 || nextIndex >= navigationHistory.Count) return;
+
+		navigationIndex = nextIndex;
+		NavigationEntry entry = navigationHistory[navigationIndex];
+		if (!string.IsNullOrEmpty(entry.MediaUrl)) {
+			await OpenLocalMedia(entry.MediaUrl, false);
+			return;
+		}
+
+		await OpenMhtml(entry.FilePath, entry.Fragment, false);
 	}
 	async Task ShowError(string message) {
 		string json = JsonSerializer.Serialize(message, AppJsonContext.Default.String);
@@ -995,6 +1027,15 @@ internal sealed class WebView : IDisposable {
 		string ContentId,
 		string Body
 	);
+	sealed record NavigationEntry(string FilePath, string Fragment, string MediaUrl) {
+		public static NavigationEntry Document(string filePath, string fragment) {
+			return new NavigationEntry(filePath, fragment, string.Empty);
+		}
+
+		public static NavigationEntry Media(string url) {
+			return new NavigationEntry(string.Empty, string.Empty, url);
+		}
+	}
 	sealed class NaturalComparer : IComparer<string> {
 		public int Compare(string? a, string? b) {
 			string[] aa = Regex.Split(a ?? "", @"(\d+)");
