@@ -409,13 +409,6 @@ internal sealed class WebView : IDisposable {
 		}
 		if (IsDocumentResourceUrl(e.Uri)) return;
 		if (IsLocalMediaUrl(e.Uri)) return;
-		if (TryGetAboutFragment(e.Uri, out string fragment)) {
-			e.Cancel = true;
-			if (!string.IsNullOrEmpty(currentFilePath)) {
-				await OpenMhtml(currentFilePath, fragment);
-			}
-			return;
-		}
 		if (e.Uri.StartsWith("about:", StringComparison.OrdinalIgnoreCase)) return;
 		await OpenLink(e);
 	}
@@ -480,11 +473,11 @@ internal sealed class WebView : IDisposable {
 		if (await TryNavigateCurrentDocumentFragment(file, fragment)) return;
 		await OpenMhtml(file, fragment);
 	}
-	async Task<bool> TryNavigateCurrentDocumentFragment(string file, string fragment) {
+	async Task<bool> TryNavigateCurrentDocumentFragment(string file, string fragment, bool addHistory = true) {
 		if (!file.Equals(currentFilePath, StringComparison.OrdinalIgnoreCase)) return false;
 		if (viewerWeb == null) return false;
 
-		AddHistory(NavigationEntry.Document(file, fragment));
+		if (addHistory) AddHistory(NavigationEntry.Document(file, fragment));
 		await NavigateToFragment(fragment);
 		return true;
 	}
@@ -515,16 +508,6 @@ internal sealed class WebView : IDisposable {
 	bool IsDocumentResourceUrl(string url) {
 		return url.StartsWith($"https://{DocumentResourceHost}/cid/", StringComparison.OrdinalIgnoreCase);
 	}
-	bool TryGetAboutFragment(string url, out string fragment) {
-		fragment = string.Empty;
-		if (!url.StartsWith("about:", StringComparison.OrdinalIgnoreCase)) return false;
-
-		int hashIndex = url.IndexOf('#');
-		if (hashIndex < 0) return false;
-
-		fragment = url[(hashIndex + 1)..];
-		return true;
-	}
 	async Task OpenLocalMedia(string url, bool addHistory = true) {
 		if (!TryResolveLocalMediaPath(url, out string file)) {
 			await ShowError("Media file not found:\\n" + url);
@@ -550,15 +533,6 @@ internal sealed class WebView : IDisposable {
 		return true;
 	}
 	async Task OpenMhtml(string file, string fragment, bool addHistory = true) {
-		if (currentDocument != null && file.Equals(currentFilePath, StringComparison.OrdinalIgnoreCase)) {
-			pendingFragment = string.Empty;
-			State.Current.lastFile = file;
-			State.Save(State.Current);
-			if (addHistory) AddHistory(NavigationEntry.Document(file, fragment));
-			await NavigateToFragment(fragment);
-			return;
-		}
-
 		currentFilePath = file;
 		pendingFragment = fragment;
 		currentDocument = documentCache.GetOrAdd(file, LoadDocument);
@@ -592,6 +566,7 @@ internal sealed class WebView : IDisposable {
 			return;
 		}
 
+		if (await TryNavigateCurrentDocumentFragment(entry.FilePath, entry.Fragment, false)) return;
 		await OpenMhtml(entry.FilePath, entry.Fragment, false);
 	}
 	async Task ShowError(string message) {
