@@ -22,7 +22,6 @@ internal sealed class WebView : IDisposable {
 	const string TitleBarRes = "TitleBar.html";
 	const string SidebarRes = "SideBar.html";
 	const string GetTitleRes = "GetTitle.js";
-	const string UnrealCSSRes = "Unreal.css";
 	const string ToggleSidebarRes = "ToggleSideBar.js";
 	const string DocumentResourceHost = "mhtml.local";
 	const string LocalMediaHost = "media.local";
@@ -305,15 +304,6 @@ internal sealed class WebView : IDisposable {
 	async Task InjectGetTitle() {
 		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(GetTitleRes));
 	}
-	async Task InjectUnrealCSS() {
-		await viewerWeb!.ExecuteScriptAsync($@"
-		const style = document.createElement('style');
-		style.textContent = `
-			{LoadEmbedded(UnrealCSSRes)}
-		`;
-		document.documentElement.appendChild(style);
-		");
-	}
 	async Task InjectToggleButton() {
 		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(ToggleSidebarRes));
 		await UpdateToggleSidebar();
@@ -453,7 +443,6 @@ internal sealed class WebView : IDisposable {
 			if (string.IsNullOrEmpty(currentFilePath)) return;
 			string pathJson = JsonSerializer.Serialize(currentFilePath, AppJsonContext.Default.String);
 			await navWeb!.ExecuteScriptAsync($"setActiveByPath({pathJson}); hideLoading();");
-			// await InjectUnrealCSS(); // style masih bug
 			await InjectGetTitle();
 			await InjectToggleButton();
 			if (!string.IsNullOrWhiteSpace(pendingFragment)) {
