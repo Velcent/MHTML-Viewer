@@ -212,11 +212,14 @@ internal sealed class WebView : IDisposable {
 		ResizeWebView();
 
 		navWeb.Settings.AreDevToolsEnabled = false;
-		viewerWeb.Settings.AreDevToolsEnabled = true;
+		viewerWeb.Settings.AreDevToolsEnabled = false;
 		titleWeb.Settings.AreDevToolsEnabled = false;
 		navWeb.Settings.AreDefaultContextMenusEnabled = false;
 		viewerWeb.Settings.AreDefaultContextMenusEnabled = true;
 		titleWeb.Settings.AreDefaultContextMenusEnabled = false;
+		navController.ZoomFactor = 0.8;
+		viewerController.ZoomFactor = 0.9;
+		titleController.ZoomFactor = 1.0;
 
 		titleWeb.WebMessageReceived += TitleWebMessageReceived;
 		navWeb.WebMessageReceived += NavWebMessageReceived;
