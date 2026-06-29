@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 internal static class Program {
 	[STAThread]
 	private static void Main() {
+#if WINDOWS
 		using var app = new WebView();
 		app.Create();
 		SynchronizationContext.SetSynchronizationContext(new SyncContext(app.Handle));
@@ -15,8 +16,14 @@ internal static class Program {
 			}
 		}, TaskScheduler.FromCurrentSynchronizationContext());
 		Native.RunMessageLoop();
+#else
+		Console.Error.WriteLine("MHTMLViewer currently uses the WebView2/Win32 backend, which is only available on Windows.");
+		Console.Error.WriteLine("Build succeeded for this platform, but the viewer UI is not implemented here yet.");
+#endif
 	}
 }
+
+#if WINDOWS
 internal sealed class SyncContext : SynchronizationContext {
 	static readonly ConcurrentQueue<(SendOrPostCallback Callback, object? State)> Queue = new();
 	readonly IntPtr hwnd;
@@ -36,3 +43,4 @@ internal sealed class SyncContext : SynchronizationContext {
 		}
 	}
 }
+#endif
