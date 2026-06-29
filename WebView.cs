@@ -645,7 +645,7 @@ internal sealed class WebView : IDisposable {
 		if (filesByDir.TryGetValue(currentDir, out var files)) {
 			Parallel.ForEach(files, file => {
 				items.Add(new Node {
-					name = WebUtility.HtmlDecode(Path.GetFileNameWithoutExtension(file)),
+					name = DecodeTreeName(Path.GetFileNameWithoutExtension(file)),
 					path = file
 				});
 			});
@@ -675,7 +675,7 @@ internal sealed class WebView : IDisposable {
 			string target = twinFile ?? FindFirstFromCache(dir, filesByDir);
 
 			items.Add(new Node {
-				name = Path.GetFileName(dir),
+				name = DecodeTreeName(Path.GetFileName(dir)),
 				path = target,
 				children = children
 			});
@@ -705,6 +705,14 @@ internal sealed class WebView : IDisposable {
 			}
 		}
 		return string.Empty;
+	}
+	string DecodeTreeName(string name) {
+		string normalized = Regex.Replace(
+			name,
+			@"&(#\d+|#x[0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]+)_",
+			"&$1;"
+		);
+		return WebUtility.HtmlDecode(normalized);
 	}
 	byte[] LoadEmbeddedBytes(string resourceName){
 		var asm = typeof(WebView).Assembly;
