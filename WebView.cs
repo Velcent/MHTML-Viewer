@@ -25,6 +25,9 @@ internal sealed class WebView : IDisposable {
 	const string ToggleSidebarRes = "ToggleSideBar.js";
 	const string DocumentResourceHost = "mhtml.local";
 	const string LocalMediaHost = "media.local";
+	const string ViewerCacheFileName = "viewer-cache.bin";
+	const string ViewerCacheMagic = "MHTMLViewerCache";
+	const int ViewerCacheVersion = 1;
 	bool isTitleUpdated = false;
 	bool isTitleInit = false;
 	bool isLoading = false;
@@ -189,12 +192,6 @@ internal sealed class WebView : IDisposable {
 		workspaceRoot = Directory.GetCurrentDirectory();
 		baseRoot = Path.Combine(workspaceRoot, "mhtml");
 
-		string first = FindFirstFile(baseRoot);
-		if (string.IsNullOrEmpty(first)) {
-			Native.ShowMessage(handle, "No MHTML files found in the mhtml folder.", "Error");
-			Native.PostQuitMessage(0);
-			return;
-		}
 		string tempPath = Path.Combine(Path.GetTempPath(), "MHTMLViewer");
 		var options = new CoreWebView2EnvironmentOptions(
 			"--allow-file-access-from-files --disable-web-security"
@@ -233,17 +230,38 @@ internal sealed class WebView : IDisposable {
 		await SetIcon($"data:{GetMime(IconRes)};base64,{Convert.ToBase64String(LoadEmbeddedBytes(IconRes))}");
 		_ = GetTitleLoop();
 
-		await ShowTitleLoading(30, "Building Assets...");
-		offlineAssets = LoadOfflineAssetIndex(
-			Path.Combine(workspaceRoot, "assets", "mhtml-uuid.tsv"),
-			workspaceRoot
-		);
+		await ShowTitleLoading(30, "Loading Viewer Cache...");
+		string cachePath = Path.Combine(workspaceRoot, "assets", ViewerCacheFileName);
+		if (!TryLoadViewerCache(cachePath, out ViewerCacheData viewerCache)) {
+			await ShowTitleLoading(30, "Building Assets...");
+			offlineAssets = LoadOfflineAssetIndex(
+				Path.Combine(workspaceRoot, "assets", "mhtml-uuid.tsv"),
+				workspaceRoot
+			);
 
-		await ShowTitleLoading(50, "Building Link Index...");
-		BuildLinkIndex();
+			await ShowTitleLoading(50, "Building Link Index...");
+			BuildLinkIndex();
 
-		await ShowTitleLoading(80, "Building File Tree...");
-		List<Node> tree = BuildTree(baseRoot);
+			await ShowTitleLoading(80, "Building File Tree...");
+			string builtFirst = FindFirstFile(baseRoot);
+			viewerCache = new ViewerCacheData(
+				builtFirst,
+				BuildTree(baseRoot),
+				offlineAssets,
+				contentLocationMap.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase)
+			);
+			SaveViewerCache(cachePath, viewerCache);
+		}
+
+		ApplyViewerCache(viewerCache);
+		string first = viewerCache.FirstFile;
+		if (string.IsNullOrEmpty(first)) {
+			Native.ShowMessage(handle, "No MHTML files found in the mhtml folder.", "Error");
+			Native.PostQuitMessage(0);
+			return;
+		}
+
+		List<Node> tree = viewerCache.Tree;
 		string treeJson = JsonSerializer.Serialize(tree, AppJsonContext.Default.ListNode);
 		string firstJson = JsonSerializer.Serialize(first, AppJsonContext.Default.String);
 		string stateJson = JsonSerializer.Serialize(State.Current, AppJsonContext.Default.STATE);
@@ -575,6 +593,121 @@ internal sealed class WebView : IDisposable {
 		} else {
 			Native.ShowMessage(handle, message, "Open Error");
 		}
+	}
+	void ApplyViewerCache(ViewerCacheData cache) {
+		offlineAssets = cache.OfflineAssets;
+		contentLocationMap.Clear();
+		foreach (var kv in cache.ContentLocations) {
+			contentLocationMap[kv.Key] = kv.Value;
+		}
+
+		FirstFile = cache.FirstFile;
+		isFirstFileInit = true;
+	}
+	bool TryLoadViewerCache(string path, out ViewerCacheData cache) {
+		cache = default!;
+		if (!File.Exists(path)) return false;
+
+		try {
+			using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan);
+			using var reader = new BinaryReader(fs, Encoding.UTF8);
+
+			if (!reader.ReadString().Equals(ViewerCacheMagic, StringComparison.Ordinal)) return false;
+			if (reader.ReadInt32() != ViewerCacheVersion) return false;
+
+			string firstFile = reader.ReadString();
+			var offline = ReadOfflineAssets(reader);
+			var locations = ReadStringDictionary(reader, StringComparer.OrdinalIgnoreCase);
+			var tree = ReadNodeList(reader);
+
+			cache = new ViewerCacheData(firstFile, tree, offline, locations);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+	void SaveViewerCache(string path, ViewerCacheData cache) {
+		try {
+			Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+			using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 65536, FileOptions.SequentialScan);
+			using var writer = new BinaryWriter(fs, Encoding.UTF8);
+
+			writer.Write(ViewerCacheMagic);
+			writer.Write(ViewerCacheVersion);
+			writer.Write(cache.FirstFile);
+			WriteOfflineAssets(writer, cache.OfflineAssets);
+			WriteStringDictionary(writer, cache.ContentLocations);
+			WriteNodeList(writer, cache.Tree);
+		} catch {
+		}
+	}
+	static void WriteOfflineAssets(BinaryWriter writer, Dictionary<string, OfflineAsset> assets) {
+		writer.Write(assets.Count);
+		foreach (var kv in assets) {
+			writer.Write(kv.Key);
+			writer.Write(kv.Value.FilePath);
+			writer.Write(kv.Value.ContentType);
+		}
+	}
+	static Dictionary<string, OfflineAsset> ReadOfflineAssets(BinaryReader reader) {
+		int count = reader.ReadInt32();
+		var assets = new Dictionary<string, OfflineAsset>(count, StringComparer.Ordinal);
+		for (int i = 0; i < count; i++) {
+			string key = reader.ReadString();
+			string filePath = reader.ReadString();
+			string contentType = reader.ReadString();
+			assets[key] = new OfflineAsset(filePath, contentType);
+		}
+		return assets;
+	}
+	static void WriteStringDictionary(BinaryWriter writer, Dictionary<string, string> items) {
+		writer.Write(items.Count);
+		foreach (var kv in items) {
+			writer.Write(kv.Key);
+			writer.Write(kv.Value);
+		}
+	}
+	static Dictionary<string, string> ReadStringDictionary(BinaryReader reader, StringComparer comparer) {
+		int count = reader.ReadInt32();
+		var items = new Dictionary<string, string>(count, comparer);
+		for (int i = 0; i < count; i++) {
+			items[reader.ReadString()] = reader.ReadString();
+		}
+		return items;
+	}
+	static void WriteNodeList(BinaryWriter writer, List<Node> nodes) {
+		writer.Write(nodes.Count);
+		foreach (var node in nodes) {
+			WriteNode(writer, node);
+		}
+	}
+	static List<Node> ReadNodeList(BinaryReader reader) {
+		int count = reader.ReadInt32();
+		var nodes = new List<Node>(count);
+		for (int i = 0; i < count; i++) {
+			nodes.Add(ReadNode(reader));
+		}
+		return nodes;
+	}
+	static void WriteNode(BinaryWriter writer, Node node) {
+		writer.Write(node.name);
+		writer.Write(node.path);
+		writer.Write(node.children != null);
+		if (node.children != null) {
+			WriteNodeList(writer, node.children);
+		}
+	}
+	static Node ReadNode(BinaryReader reader) {
+		var node = new Node {
+			name = reader.ReadString(),
+			path = reader.ReadString()
+		};
+
+		if (reader.ReadBoolean()) {
+			node.children = ReadNodeList(reader);
+		}
+
+		return node;
 	}
 	void BuildLinkIndex() {
 		Parallel.ForEach(
@@ -1011,6 +1144,12 @@ internal sealed class WebView : IDisposable {
 		titleController?.Close();
 	}
 	sealed record OfflineAsset(string FilePath, string ContentType);
+	sealed record ViewerCacheData(
+		string FirstFile,
+		List<Node> Tree,
+		Dictionary<string, OfflineAsset> OfflineAssets,
+		Dictionary<string, string> ContentLocations
+	);
 	sealed record LoadedDocument(
 		string Html,
 		Dictionary<string, ResourceEntry> ResourcesByUrl,
