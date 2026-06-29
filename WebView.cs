@@ -27,7 +27,7 @@ internal sealed class WebView : IDisposable {
 	const string LocalMediaHost = "media.local";
 	const string ViewerCacheFileName = "viewer-cache.bin";
 	const string ViewerCacheMagic = "MHTMLViewerCache";
-	const int ViewerCacheVersion = 1;
+	const int ViewerCacheVersion = 2;
 	bool isTitleUpdated = false;
 	bool isTitleInit = false;
 	bool isLoading = false;
@@ -235,15 +235,15 @@ internal sealed class WebView : IDisposable {
 		await SetIcon($"data:{GetMime(IconRes)};base64,{Convert.ToBase64String(LoadEmbeddedBytes(IconRes))}");
 		_ = GetTitleLoop();
 
-		await ShowTitleLoading(30, "Loading Viewer Cache...");
+		await ShowTitleLoading(30, "Building Assets...");
+		offlineAssets = LoadOfflineAssetIndex(
+			Path.Combine(workspaceRoot, "assets", "mhtml-uuid.tsv"),
+			workspaceRoot
+		);
+
+		await ShowTitleLoading(60, "Loading Viewer Cache...");
 		string cachePath = Path.Combine(workspaceRoot, "assets", ViewerCacheFileName);
 		if (!TryLoadViewerCache(cachePath, out ViewerCacheData viewerCache)) {
-			await ShowTitleLoading(30, "Building Assets...");
-			offlineAssets = LoadOfflineAssetIndex(
-				Path.Combine(workspaceRoot, "assets", "mhtml-uuid.tsv"),
-				workspaceRoot
-			);
-
 			await ShowTitleLoading(50, "Building Link Index...");
 			BuildLinkIndex();
 
@@ -252,7 +252,6 @@ internal sealed class WebView : IDisposable {
 			viewerCache = new ViewerCacheData(
 				builtFirst,
 				BuildTree(baseRoot),
-				offlineAssets,
 				contentLocationMap.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase)
 			);
 			SaveViewerCache(cachePath, viewerCache);
@@ -672,7 +671,6 @@ internal sealed class WebView : IDisposable {
 		}
 	}
 	void ApplyViewerCache(ViewerCacheData cache) {
-		offlineAssets = cache.OfflineAssets;
 		contentLocationMap.Clear();
 		foreach (var kv in cache.ContentLocations) {
 			contentLocationMap[kv.Key] = kv.Value;
@@ -693,11 +691,10 @@ internal sealed class WebView : IDisposable {
 			if (reader.ReadInt32() != ViewerCacheVersion) return false;
 
 			string firstFile = reader.ReadString();
-			var offline = ReadOfflineAssets(reader);
 			var locations = ReadStringDictionary(reader, StringComparer.OrdinalIgnoreCase);
 			var tree = ReadNodeList(reader);
 
-			cache = new ViewerCacheData(firstFile, tree, offline, locations);
+			cache = new ViewerCacheData(firstFile, tree, locations);
 			return true;
 		} catch {
 			return false;
@@ -712,30 +709,10 @@ internal sealed class WebView : IDisposable {
 			writer.Write(ViewerCacheMagic);
 			writer.Write(ViewerCacheVersion);
 			writer.Write(cache.FirstFile);
-			WriteOfflineAssets(writer, cache.OfflineAssets);
 			WriteStringDictionary(writer, cache.ContentLocations);
 			WriteNodeList(writer, cache.Tree);
 		} catch {
 		}
-	}
-	static void WriteOfflineAssets(BinaryWriter writer, Dictionary<string, OfflineAsset> assets) {
-		writer.Write(assets.Count);
-		foreach (var kv in assets) {
-			writer.Write(kv.Key);
-			writer.Write(kv.Value.FilePath);
-			writer.Write(kv.Value.ContentType);
-		}
-	}
-	static Dictionary<string, OfflineAsset> ReadOfflineAssets(BinaryReader reader) {
-		int count = reader.ReadInt32();
-		var assets = new Dictionary<string, OfflineAsset>(count, StringComparer.Ordinal);
-		for (int i = 0; i < count; i++) {
-			string key = reader.ReadString();
-			string filePath = reader.ReadString();
-			string contentType = reader.ReadString();
-			assets[key] = new OfflineAsset(filePath, contentType);
-		}
-		return assets;
 	}
 	static void WriteStringDictionary(BinaryWriter writer, Dictionary<string, string> items) {
 		writer.Write(items.Count);
@@ -1231,7 +1208,6 @@ internal sealed class WebView : IDisposable {
 	sealed record ViewerCacheData(
 		string FirstFile,
 		List<Node> Tree,
-		Dictionary<string, OfflineAsset> OfflineAssets,
 		Dictionary<string, string> ContentLocations
 	);
 	sealed record LoadedDocument(
