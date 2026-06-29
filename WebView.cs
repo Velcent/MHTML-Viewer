@@ -29,9 +29,9 @@ internal sealed class WebView : IDisposable {
 	bool isTitleInit = false;
 	bool isLoading = false;
 
-	readonly string workspaceRoot;
-	readonly string baseRoot;
-	readonly Dictionary<string, OfflineAsset> offlineAssets;
+	string workspaceRoot = string.Empty;
+	string baseRoot = string.Empty;
+	Dictionary<string, OfflineAsset> offlineAssets = new(StringComparer.Ordinal);
 	readonly ConcurrentDictionary<string, string> contentLocationMap = new(StringComparer.OrdinalIgnoreCase);
 	readonly ConcurrentDictionary<string, LoadedDocument> documentCache = new(StringComparer.OrdinalIgnoreCase);
 	CoreWebView2Controller? navController;
@@ -49,15 +49,6 @@ internal sealed class WebView : IDisposable {
 
 	// IMPORTANT: prevent GC
 	Native.WndProcDelegate? wndProcDelegate;
-
-	public WebView() {
-		workspaceRoot = Directory.GetCurrentDirectory();
-		baseRoot = Path.Combine(workspaceRoot, "mhtml");
-		offlineAssets = LoadOfflineAssetIndex(
-			Path.Combine(workspaceRoot, "assets", "mhtml-uuid.tsv"),
-			workspaceRoot
-		);
-	}
 
 	public IntPtr Handle => handle;
 
@@ -195,6 +186,8 @@ internal sealed class WebView : IDisposable {
 		);
 	}
 	public async Task InitializeAsync() {
+		workspaceRoot = Directory.GetCurrentDirectory();
+		baseRoot = Path.Combine(workspaceRoot, "mhtml");
 
 		string first = FindFirstFile(baseRoot);
 		if (string.IsNullOrEmpty(first)) {
@@ -239,6 +232,12 @@ internal sealed class WebView : IDisposable {
 		titleWeb.NavigateToString(LoadEmbedded(TitleBarRes));
 		await SetIcon($"data:{GetMime(IconRes)};base64,{Convert.ToBase64String(LoadEmbeddedBytes(IconRes))}");
 		_ = GetTitleLoop();
+
+		await ShowTitleLoading(30, "Building Assets...");
+		offlineAssets = LoadOfflineAssetIndex(
+			Path.Combine(workspaceRoot, "assets", "mhtml-uuid.tsv"),
+			workspaceRoot
+		);
 
 		await ShowTitleLoading(50, "Building Link Index...");
 		BuildLinkIndex();
