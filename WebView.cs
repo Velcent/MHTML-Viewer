@@ -22,6 +22,8 @@ internal sealed class WebView : IDisposable {
 	const string TitleBarRes = "TitleBar.html";
 	const string SidebarRes = "SideBar.html";
 	const string GetTitleRes = "GetTitle.js";
+	const string EpicSwitchRes = "EpicSwitch.js";
+	const string EpicCodeRes = "EpicCode.js";
 	const string ToggleSidebarRes = "ToggleSideBar.js";
 	const string DocumentResourceHost = "mhtml.local";
 	const string LocalMediaHost = "media.local";
@@ -215,7 +217,7 @@ internal sealed class WebView : IDisposable {
 		ResizeWebView();
 
 		navWeb.Settings.AreDevToolsEnabled = false;
-		viewerWeb.Settings.AreDevToolsEnabled = false;
+		viewerWeb.Settings.AreDevToolsEnabled = true;
 		titleWeb.Settings.AreDevToolsEnabled = false;
 		navWeb.Settings.AreDefaultContextMenusEnabled = false;
 		viewerWeb.Settings.AreDefaultContextMenusEnabled = true;
@@ -400,6 +402,12 @@ internal sealed class WebView : IDisposable {
 		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(ToggleSidebarRes));
 		await UpdateToggleSidebar();
 	}
+	async Task InjectEpicSwitch() {
+		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(EpicSwitchRes));
+	}
+	async Task InjectEpicCode() {
+		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(EpicCodeRes));
+	}
 	async Task ToggleSidebar() {
 		State.Current.collapsed = !State.Current.collapsed;
 		State.Save(State.Current);
@@ -531,6 +539,8 @@ internal sealed class WebView : IDisposable {
 			await navWeb!.ExecuteScriptAsync($"setActiveByPath({pathJson}); hideLoading();");
 			await InjectGetTitle();
 			await InjectToggleButton();
+			await InjectEpicSwitch();
+			await InjectEpicCode();
 			if (!string.IsNullOrWhiteSpace(pendingFragment)) {
 				string fragment = pendingFragment;
 				pendingFragment = string.Empty;
