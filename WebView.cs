@@ -235,13 +235,13 @@ internal sealed class WebView : IDisposable {
 		await SetIcon($"data:{GetMime(IconRes)};base64,{Convert.ToBase64String(LoadEmbeddedBytes(IconRes))}");
 		_ = GetTitleLoop();
 
-		await ShowTitleLoading(30, "Building Assets...");
+		await ShowTitleLoading(30, "Loading Assets...");
 		offlineAssets = LoadOfflineAssetIndex(
 			Path.Combine(workspaceRoot, "assets", "mhtml-uuid.tsv"),
 			workspaceRoot
 		);
 
-		await ShowTitleLoading(60, "Loading Viewer Cache...");
+		await ShowTitleLoading(60, "Loading Cache...");
 		string cachePath = Path.Combine(workspaceRoot, "assets", ViewerCacheFileName);
 		if (!TryLoadViewerCache(cachePath, out ViewerCacheData viewerCache)) {
 			await ShowTitleLoading(50, "Building Link Index...");
