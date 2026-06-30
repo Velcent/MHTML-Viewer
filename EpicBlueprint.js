@@ -64,6 +64,16 @@
 				color: #cfd3dc;
 				font: 600 13px/1.5 inherit;
 			}
+			.bue-render.mhtml-static-blueprint .frame {
+				cursor: grab;
+			}
+			.bue-render.mhtml-static-blueprint.is-dragging .frame {
+				cursor: grabbing;
+			}
+			.bue-render.mhtml-static-blueprint .node.selected {
+				outline: 2px solid rgba(0, 174, 255, .9);
+				outline-offset: 2px;
+			}
 		`;
 		document.head.appendChild(style);
 	}
@@ -108,6 +118,7 @@
 			render.dataset.mhtmlBlueprintReady = "true";
 			render.classList.add("mhtml-blueprint-ready");
 			applyBlueprintHeight(render, target);
+			bindStaticBlueprintInteractions(target);
 			return;
 		}
 
@@ -231,6 +242,265 @@
 		box.className = "mhtml-blueprint-message";
 		box.textContent = message;
 		target.appendChild(box);
+	}
+
+	function bindStaticBlueprintInteractions(target) {
+		const root = target.querySelector(".bue-render");
+		const frame = target.querySelector(".frame");
+		const canvas = target.querySelector(".canvas");
+		const reference = target.querySelector(".reference");
+		if (!root || !frame || !canvas || !reference) return;
+		if (root.dataset.mhtmlStaticInteractions === "true") return;
+
+		root.dataset.mhtmlStaticInteractions = "true";
+		root.classList.add("mhtml-static-blueprint");
+		ensureStaticHeader(frame);
+
+		const initial = parseTransform(canvas.style.transform || getComputedStyle(canvas).transform);
+		const state = {
+			x: initial.x,
+			y: initial.y,
+			scale: initial.scale,
+			resetX: initial.x,
+			resetY: initial.y,
+			resetScale: initial.scale,
+			dragging: false,
+			pointerId: null,
+			startClientX: 0,
+			startClientY: 0,
+			startX: initial.x,
+			startY: initial.y,
+			frameHeight: frame.style.height || getComputedStyle(frame).height || defaultHeight
+		};
+
+		applyStaticTransform(canvas, reference, state);
+		updateStaticZoom(root, state.scale);
+
+		frame.addEventListener("pointerdown", event => {
+			if (event.target.closest(".frame-header")) return;
+			if (event.button !== 0 && event.button !== 1 && event.button !== 2) return;
+
+			state.dragging = true;
+			state.pointerId = event.pointerId;
+			state.startClientX = event.clientX;
+			state.startClientY = event.clientY;
+			state.startX = state.x;
+			state.startY = state.y;
+			root.classList.add("is-dragging");
+			frame.setPointerCapture(event.pointerId);
+			event.preventDefault();
+		});
+
+		frame.addEventListener("pointermove", event => {
+			if (!state.dragging || state.pointerId !== event.pointerId) return;
+			state.x = state.startX + event.clientX - state.startClientX;
+			state.y = state.startY + event.clientY - state.startClientY;
+			applyStaticTransform(canvas, reference, state);
+			event.preventDefault();
+		});
+
+		const endDrag = event => {
+			if (!state.dragging || state.pointerId !== event.pointerId) return;
+			state.dragging = false;
+			state.pointerId = null;
+			root.classList.remove("is-dragging");
+			try {
+				frame.releasePointerCapture(event.pointerId);
+			} catch {
+				// Pointer capture may already be released when leaving fullscreen.
+			}
+		};
+		frame.addEventListener("pointerup", endDrag);
+		frame.addEventListener("pointercancel", endDrag);
+		frame.addEventListener("contextmenu", event => event.preventDefault());
+
+		frame.addEventListener("wheel", event => {
+			if (!event.ctrlKey) return;
+			const delta = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+			zoomStaticBlueprint(frame, canvas, reference, root, state, event.clientX, event.clientY, delta);
+			event.preventDefault();
+		}, { passive: false });
+
+		frame.addEventListener("click", event => {
+			const node = event.target.closest(".node");
+			if (!node || !frame.contains(node)) return;
+			if (!event.ctrlKey && !event.metaKey) {
+				for (const selected of frame.querySelectorAll(".node.selected")) selected.classList.remove("selected");
+			}
+			node.classList.toggle("selected");
+		});
+
+		frame.querySelector(".frame-header__buttons")?.addEventListener("click", event => {
+			const button = event.target.closest(".frame-header__buttons-fullscreen, .frame-header__buttons-reset, .frame-header__buttons-panel");
+			if (!button) return;
+			if (button.classList.contains("frame-header__buttons-fullscreen")) {
+				toggleStaticFullscreen(root, frame, button, state);
+			} else if (button.classList.contains("frame-header__buttons-reset")) {
+				resetStaticBlueprint(canvas, reference, root, state);
+			} else if (button.classList.contains("frame-header__buttons-panel")) {
+				toggleStaticPanel(root);
+			}
+			event.preventDefault();
+			event.stopPropagation();
+		});
+
+		document.addEventListener("fullscreenchange", () => {
+			if (document.fullscreenElement === root) return;
+			const button = frame.querySelector(".frame-header__buttons-fullscreen");
+			button?.classList.remove("frame-header__buttons-fullscreen--exit");
+			if (state.frameHeight) frame.style.height = state.frameHeight;
+		});
+	}
+
+	function ensureStaticHeader(frame) {
+		let header = frame.querySelector(":scope > .frame-header");
+		if (!header) {
+			header = document.createElement("div");
+			header.className = "frame-header";
+			frame.appendChild(header);
+		}
+
+		if (!header.querySelector(".frame-header__buttons")) {
+			const buttons = document.createElement("div");
+			buttons.className = "frame-header__buttons";
+			header.insertBefore(buttons, header.firstChild);
+		}
+		const buttons = header.querySelector(".frame-header__buttons");
+		ensureStaticHeaderButton(buttons, "frame-header__buttons-fullscreen", "Fullscreen");
+		ensureStaticHeaderButton(buttons, "frame-header__buttons-reset", "Reset");
+
+		if (!header.querySelector(".frame-header__breadcrumb")) {
+			const breadcrumb = document.createElement("div");
+			breadcrumb.className = "frame-header__breadcrumb";
+			const item = document.createElement("span");
+			item.className = "frame-header__breadcrumb-item";
+			item.textContent = "Graph";
+			breadcrumb.appendChild(item);
+			header.appendChild(breadcrumb);
+		}
+
+		if (!header.querySelector(".frame-header__current-zoom")) {
+			const zoom = document.createElement("div");
+			zoom.className = "frame-header__current-zoom";
+			zoom.textContent = "Zoom 1:1";
+			header.appendChild(zoom);
+		}
+
+		if (!frame.querySelector(":scope > .overlay")) {
+			const overlay = document.createElement("div");
+			overlay.className = "overlay";
+			overlay.style.display = "none";
+			frame.appendChild(overlay);
+		}
+	}
+
+	function ensureStaticHeaderButton(parent, className, text) {
+		if (!parent || parent.querySelector("." + className)) return;
+		const button = document.createElement("div");
+		button.className = className;
+		button.textContent = text;
+		parent.appendChild(button);
+	}
+
+	function parseTransform(value) {
+		const fallback = { x: 0, y: 0, scale: 1 };
+		if (!value || value === "none") return fallback;
+
+		const translate = /translate\(\s*(-?\d+(?:\.\d+)?)px(?:,\s*(-?\d+(?:\.\d+)?)px)?\s*\)/.exec(value);
+		const scale = /scale\(\s*(-?\d+(?:\.\d+)?)\s*\)/.exec(value);
+		if (translate || scale) {
+			return {
+				x: translate ? Number(translate[1]) || 0 : 0,
+				y: translate ? Number(translate[2]) || 0 : 0,
+				scale: scale ? Number(scale[1]) || 1 : 1
+			};
+		}
+
+		const matrix = /matrix\(\s*([^)]*)\)/.exec(value);
+		if (!matrix) return fallback;
+		const parts = matrix[1].split(",").map(part => Number(part.trim()));
+		return {
+			x: parts[4] || 0,
+			y: parts[5] || 0,
+			scale: parts[0] || 1
+		};
+	}
+
+	function applyStaticTransform(canvas, reference, state) {
+		const transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
+		canvas.style.transform = transform;
+		reference.style.transform = transform;
+	}
+
+	function zoomStaticBlueprint(frame, canvas, reference, root, state, clientX, clientY, factor) {
+		const oldScale = state.scale;
+		const newScale = Math.max(0.04, Math.min(8, Number((oldScale * factor).toFixed(4))));
+		if (newScale === oldScale) return;
+
+		const rect = frame.getBoundingClientRect();
+		const px = clientX - rect.left;
+		const py = clientY - rect.top;
+		const ratio = newScale / oldScale;
+
+		state.x = px - (px - state.x) * ratio;
+		state.y = py - (py - state.y) * ratio;
+		state.scale = newScale;
+		applyStaticTransform(canvas, reference, state);
+		updateStaticZoom(root, state.scale);
+		showStaticOverlay(frame, `Zoom ${formatStaticZoom(state.scale)}`);
+	}
+
+	function resetStaticBlueprint(canvas, reference, root, state) {
+		state.x = state.resetX;
+		state.y = state.resetY;
+		state.scale = state.resetScale;
+		applyStaticTransform(canvas, reference, state);
+		updateStaticZoom(root, state.scale);
+	}
+
+	function updateStaticZoom(root, scale) {
+		const zoom = root.querySelector(".frame-header__current-zoom");
+		if (!zoom) return;
+		zoom.classList.add("update");
+		zoom.textContent = `Zoom ${formatStaticZoom(scale)}`;
+		setTimeout(() => zoom.classList.remove("update"), 120);
+	}
+
+	function formatStaticZoom(scale) {
+		if (Math.abs(scale - 1) < 0.001) return "1:1";
+		return `${Math.round(scale * 100)}%`;
+	}
+
+	function showStaticOverlay(frame, text) {
+		const overlay = frame.querySelector(":scope > .overlay");
+		if (!overlay) return;
+		overlay.textContent = text;
+		overlay.style.display = "flex";
+		clearTimeout(frame.__mhtmlBlueprintOverlayTimer);
+		frame.__mhtmlBlueprintOverlayTimer = setTimeout(() => {
+			overlay.style.display = "none";
+		}, 700);
+	}
+
+	function toggleStaticFullscreen(root, frame, button, state) {
+		if (document.fullscreenElement === root) {
+			button.classList.remove("frame-header__buttons-fullscreen--exit");
+			if (state.frameHeight) frame.style.height = state.frameHeight;
+			document.exitFullscreen?.();
+			return;
+		}
+
+		state.frameHeight = frame.style.height || getComputedStyle(frame).height || defaultHeight;
+		root.requestFullscreen?.().then(() => {
+			frame.style.height = `${screen.height}px`;
+			button.classList.add("frame-header__buttons-fullscreen--exit");
+		}).catch(() => {});
+	}
+
+	function toggleStaticPanel(root) {
+		const panel = root.querySelector(".panel");
+		if (!panel) return;
+		panel.style.display = panel.style.display === "block" ? "none" : "block";
 	}
 
 	function ensureBlueprintLibrary() {
