@@ -38,48 +38,60 @@
 		style.textContent = `
 			block-code-snippet.mhtml-code-ready {
 				display: block;
-				margin: 1rem 0 1.35rem;
-				border: 1px solid rgba(255, 255, 255, .1);
-				border-radius: 10px;
+				margin: 1.25rem 0 1.5rem;
+				padding: 20px 22px 22px;
+				border: 1px solid #3b3c42;
+				border-radius: 16px;
 				overflow: hidden;
-				background: #17181d;
-				box-shadow: 0 12px 28px rgba(0, 0, 0, .22);
+				background: #121318;
+				box-shadow: none;
 			}
 			block-code-snippet.mhtml-code-ready .block-code-snippet-header {
 				display: flex;
 				align-items: center;
-				gap: .75rem;
-				min-height: 40px;
-				padding: .65rem .9rem;
-				border-bottom: 1px solid rgba(255, 255, 255, .08);
-				background: linear-gradient(180deg, #24262d, #1c1d23);
-				color: #d7dce7;
+				gap: 8px;
+				min-height: 0;
+				padding: 0 0 38px;
+				border: 0;
+				background: transparent;
+				color: #f4f4f5;
 			}
 			block-code-snippet.mhtml-code-ready .block-code-snippet-header-type {
-				color: #7bdcff;
-				font-size: .78rem;
+				display: inline-flex;
+				align-items: center;
+				min-height: 20px;
+				padding: 2px 8px;
+				border-radius: 4px;
+				background: #303139;
+				color: #f5f5f6;
+				font-size: 12px;
 				font-weight: 700;
-				letter-spacing: .04em;
-				text-transform: uppercase;
+				letter-spacing: 0;
+				line-height: 1.25;
+				text-transform: none;
 			}
 			block-code-snippet.mhtml-code-ready .block-code-snippet-header-title {
-				color: #f0f2f7;
-				font-size: .9rem;
+				color: #cfd3dc;
+				font-size: 13px;
 				font-weight: 600;
 			}
 			block-code-snippet.mhtml-code-ready .pre-block {
 				position: relative;
-				background: #111217;
+				margin: 0;
+				border: 0;
+				border-radius: 0;
+				overflow: hidden;
+				background: #141519;
 			}
 			block-code-snippet.mhtml-code-ready pre {
 				margin: 0;
-				padding: 1rem 1.15rem;
+				padding: 0;
 				overflow: auto;
-				color: #d7dce7;
+				color: #f4f4f5;
 				background: transparent;
 				tab-size: 4;
 				white-space: pre;
-				font: 13px/1.58 "Cascadia Code", "Consolas", monospace;
+				font: 14px/1.7 "Cascadia Code", "Consolas", "Courier New", monospace;
 			}
 			block-code-snippet.mhtml-code-ready code {
 				color: inherit;
@@ -87,16 +99,16 @@
 				font: inherit;
 			}
 			block-code-snippet.mhtml-code-ready.is-collapsed .pre-block {
-				max-height: calc(${collapsedLines} * 1.58em + 2rem);
+				max-height: calc(${collapsedLines} * 1.7em + 32px);
 				overflow: hidden;
 			}
 			block-code-snippet.mhtml-code-ready .pre-overlay {
 				display: none;
 				position: absolute;
 				inset: auto 0 0;
-				height: 76px;
+				height: 82px;
 				pointer-events: none;
-				background: linear-gradient(180deg, rgba(17, 18, 23, 0), #111217 82%);
+				background: linear-gradient(180deg, rgba(20, 21, 25, 0), #141519 86%);
 			}
 			block-code-snippet.mhtml-code-ready.is-collapsed .pre-overlay {
 				display: block;
@@ -104,34 +116,68 @@
 			block-code-snippet.mhtml-code-ready .block-code-snippet-actions {
 				display: flex;
 				flex-wrap: wrap;
-				gap: .5rem;
-				padding: .7rem .9rem;
-				border-top: 1px solid rgba(255, 255, 255, .08);
-				background: #1b1c22;
+				gap: 8px;
+				padding: 26px 0 0;
+				border: 0;
+				background: transparent;
 			}
 			block-code-snippet.mhtml-code-ready .block-code-snippet-actions button {
-				border: 1px solid rgba(255, 255, 255, .12);
-				border-radius: 7px;
-				padding: .42rem .7rem;
-				background: #2a2c34;
-				color: #f2f5fb;
+				display: inline-flex;
+				align-items: center;
+				gap: 8px;
+				border: 0;
+				border-radius: 4px;
+				padding: 5px 10px;
+				background: #3a3b43;
+				color: #f4f4f5;
 				cursor: pointer;
-				font: 600 12px/1.2 inherit;
+				font: 700 12px/1.25 inherit;
 			}
 			block-code-snippet.mhtml-code-ready .block-code-snippet-actions button:hover {
-				border-color: rgba(123, 220, 255, .45);
-				background: #343743;
+				background: #494b55;
 			}
 			block-code-snippet.mhtml-code-ready .block-code-snippet-actions button[hidden] {
 				display: none;
 			}
-			.mhtml-code-keyword { color: #ff7ab6; }
-			.mhtml-code-string { color: #f6d365; }
-			.mhtml-code-comment { color: #778195; font-style: italic; }
-			.mhtml-code-number { color: #b5a7ff; }
-			.mhtml-code-literal { color: #7bdcff; }
-			.mhtml-code-builtin { color: #8ee6a7; }
-			.mhtml-code-symbol { color: #f0a36b; }
+			block-code-snippet.mhtml-code-ready .mhtml-code-lines {
+				display: table;
+				width: 100%;
+				border-collapse: collapse;
+				padding: 0;
+			}
+			block-code-snippet.mhtml-code-ready .mhtml-code-line {
+				display: table-row;
+			}
+			block-code-snippet.mhtml-code-ready .mhtml-code-line-number {
+				display: table-cell;
+				min-width: 28px;
+				padding: 0 12px 0 10px;
+				color: #d7ecff;
+				text-align: right;
+				user-select: none;
+				white-space: pre;
+			}
+			block-code-snippet.mhtml-code-ready .mhtml-code-line-content {
+				display: table-cell;
+				width: 100%;
+				padding-right: 20px;
+				white-space: pre;
+			}
+			block-code-snippet.mhtml-code-ready .mhtml-code-line:first-child .mhtml-code-line-number,
+			block-code-snippet.mhtml-code-ready .mhtml-code-line:first-child .mhtml-code-line-content {
+				padding-top: 18px;
+			}
+			block-code-snippet.mhtml-code-ready .mhtml-code-line:last-child .mhtml-code-line-number,
+			block-code-snippet.mhtml-code-ready .mhtml-code-line:last-child .mhtml-code-line-content {
+				padding-bottom: 18px;
+			}
+			.mhtml-code-keyword { color: #f052ff; }
+			.mhtml-code-string { color: #9be871; }
+			.mhtml-code-comment { color: #697487; font-style: italic; }
+			.mhtml-code-number { color: #b8a2ff; }
+			.mhtml-code-literal { color: #71c8ff; }
+			.mhtml-code-builtin { color: #61d6ff; }
+			.mhtml-code-symbol { color: #3aa0ff; }
 		`;
 		document.head.appendChild(style);
 	}
@@ -193,8 +239,8 @@
 			snippet.appendChild(actions);
 		}
 
-		const lineCount = countLines(code.textContent || "");
-		const canExpand = lineCount > collapsedLines;
+		const lineCount = countLines(code.dataset.mhtmlRawCode || code.textContent || "");
+		const canExpand = shouldShowExpand(actions, lineCount);
 		wireButtons(snippet, actions, canExpand);
 		setExpanded(snippet, !canExpand);
 	}
@@ -206,13 +252,13 @@
 			const expand = document.createElement("button");
 			expand.type = "button";
 			expand.dataset.mhtmlCodeAction = "expand";
-			expand.textContent = collapsedText;
+			setButtonLabel(expand, collapsedText);
 			actions.appendChild(expand);
 		}
 		const copy = document.createElement("button");
 		copy.type = "button";
 		copy.dataset.mhtmlCodeAction = "copy";
-		copy.textContent = copyText;
+		setButtonLabel(copy, copyText);
 		actions.appendChild(copy);
 		return actions;
 	}
@@ -236,7 +282,7 @@
 		}
 
 		if (expand) {
-			expand.hidden = !canExpand;
+			expand.hidden = false;
 			expand.dataset.mhtmlCodeAction = "expand";
 			expand.addEventListener("click", event => {
 				event.preventDefault();
@@ -245,28 +291,70 @@
 		}
 
 		copy.dataset.mhtmlCodeAction = "copy";
+		copy.dataset.mhtmlCodeSuffix = copy.querySelector(".ps-1")?.textContent || copy.dataset.mhtmlCodeSuffix || "";
 		copy.addEventListener("click", async event => {
 			event.preventDefault();
-			const previous = copy.textContent;
-			await copyToClipboard(snippet.querySelector("code")?.textContent || "");
-			copy.textContent = copiedText;
+			const previous = readButtonLabel(copy) || copyText;
+			const code = snippet.querySelector("code");
+			await copyToClipboard(code?.dataset.mhtmlRawCode || code?.textContent || "");
+			setButtonLabel(copy, copiedText);
 			setTimeout(() => {
-				copy.textContent = previous && /copy/i.test(previous) ? previous : copyText;
+				setButtonLabel(copy, /copy/i.test(previous) ? previous : copyText);
 			}, 1200);
 		});
+	}
+
+	function shouldShowExpand(actions, lineCount) {
+		if (lineCount > collapsedLines) return true;
+		const text = actions.textContent || "";
+		if (/expand|collapse|show/i.test(text)) return true;
+		const match = text.match(/\((\d+)\s+lines?\s+long\)/i);
+		return match ? Number(match[1]) > collapsedLines : false;
 	}
 
 	function setExpanded(snippet, expanded) {
 		snippet.classList.toggle("is-expanded", expanded);
 		snippet.classList.toggle("is-collapsed", !expanded);
 		const expand = snippet.querySelector("[data-mhtml-code-action='expand']");
-		if (expand) expand.textContent = expanded ? expandedText : collapsedText;
+		if (expand) setButtonLabel(expand, expanded ? expandedText : collapsedText);
+	}
+
+	function setButtonLabel(button, label) {
+		const icon = button.querySelector(".eds-icon")?.cloneNode(true);
+		const count = button.dataset.mhtmlCodeSuffix || button.querySelector(".ps-1")?.textContent || "";
+		button.textContent = "";
+		if (icon) button.appendChild(icon);
+		button.appendChild(document.createTextNode(label));
+		if (count && /copy/i.test(label)) {
+			const suffix = document.createElement("span");
+			suffix.className = "ps-1";
+			suffix.textContent = count;
+			button.appendChild(suffix);
+		}
+	}
+
+	function readButtonLabel(button) {
+		return Array.from(button.childNodes)
+			.filter(node => node.nodeType === Node.TEXT_NODE)
+			.map(node => node.textContent || "")
+			.join("")
+			.trim();
 	}
 
 	function highlightCode(code, language) {
 		if (code.dataset.mhtmlHighlighted === "true") return;
 		code.dataset.mhtmlHighlighted = "true";
-		code.innerHTML = colorize(code.textContent || "", language);
+		const raw = code.textContent || "";
+		code.dataset.mhtmlRawCode = raw;
+		code.innerHTML = renderLineNumbers(raw, language);
+	}
+
+	function renderLineNumbers(text, language) {
+		const lines = text.split(/\r\n|\r|\n/);
+		return `<span class="mhtml-code-lines">${lines.map((line, index) => {
+			const content = line.length ? colorize(line, language) : " ";
+			return `<span class="mhtml-code-line"><span class="mhtml-code-line-number">${index + 1}</span><span class="mhtml-code-line-content">${content}</span></span>`;
+		}).join("")}</span>`;
 	}
 
 	function colorize(text, language) {
@@ -334,6 +422,7 @@
 
 	function shouldTreatHashAsComment(text, index, language) {
 		const lang = (language || "").toLowerCase();
+		if (lang.includes("cpp") || lang.includes("c++") || lang === "c" || lang.includes("csharp")) return false;
 		if (lang.includes("python") || lang.includes("bash") || lang.includes("shell") || lang.includes("ini")) return true;
 		let cursor = index - 1;
 		while (cursor >= 0 && text[cursor] !== "\n" && text[cursor] !== "\r") {
