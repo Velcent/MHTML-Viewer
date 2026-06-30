@@ -41,6 +41,7 @@
 		<EmbeddedResource Include="EpicSwitch.js" />
 		<EmbeddedResource Include="EpicCode.js" />
 		<EmbeddedResource Include="EpicComparisonSlider.js" />
+		<EmbeddedResource Include="EpicSliderSequence.js" />
 		<EmbeddedResource Include="ToggleSideBar.js" />
 		<TrimmerRootAssembly Include="Microsoft.Web.WebView2.Core" />
 	</ItemGroup>

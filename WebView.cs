@@ -25,12 +25,13 @@ internal sealed class WebView : IDisposable {
 	const string EpicSwitchRes = "EpicSwitch.js";
 	const string EpicCodeRes = "EpicCode.js";
 	const string EpicComparisonSliderRes = "EpicComparisonSlider.js";
+	const string EpicSliderSequenceRes = "EpicSliderSequence.js";
 	const string ToggleSidebarRes = "ToggleSideBar.js";
 	const string DocumentResourceHost = "mhtml.local";
 	const string LocalMediaHost = "media.local";
 	const string ViewerCacheFileName = "viewer-cache.bin";
 	const string ViewerCacheMagic = "MHTMLViewerCache";
-	const int ViewerCacheVersion = 2;
+	const int ViewerCacheVersion = 4;
 	bool isTitleUpdated = false;
 	bool isTitleInit = false;
 	bool isLoading = false;
@@ -412,6 +413,9 @@ internal sealed class WebView : IDisposable {
 	async Task InjectEpicComparisonSlider() {
 		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(EpicComparisonSliderRes));
 	}
+	async Task InjectEpicSliderSequence() {
+		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(EpicSliderSequenceRes));
+	}
 	async Task ToggleSidebar() {
 		State.Current.collapsed = !State.Current.collapsed;
 		State.Save(State.Current);
@@ -546,6 +550,7 @@ internal sealed class WebView : IDisposable {
 			await InjectEpicSwitch();
 			await InjectEpicCode();
 			await InjectEpicComparisonSlider();
+			await InjectEpicSliderSequence();
 			if (!string.IsNullOrWhiteSpace(pendingFragment)) {
 				string fragment = pendingFragment;
 				pendingFragment = string.Empty;
@@ -916,6 +921,11 @@ internal sealed class WebView : IDisposable {
 		var allFiles = Directory
 			.EnumerateFiles(root, "*.mhtml", SearchOption.AllDirectories)
 			.Concat(Directory.EnumerateFiles(root, "*.html", SearchOption.AllDirectories))
+			.GroupBy(GetSwitchVariantGroupKey, StringComparer.OrdinalIgnoreCase)
+			.Select(g => g
+				.OrderBy(GetSwitchVariantPreference)
+				.ThenBy(f => f, StringComparer.OrdinalIgnoreCase)
+				.First())
 			.ToList();
 
 		// 3. Group ke folder (RAM only)
@@ -933,7 +943,7 @@ internal sealed class WebView : IDisposable {
 		if (filesByDir.TryGetValue(currentDir, out var files)) {
 			Parallel.ForEach(files, file => {
 				items.Add(new Node {
-					name = DecodeTreeName(Path.GetFileNameWithoutExtension(file)),
+					name = DecodeTreeName(GetSwitchVariantBaseName(Path.GetFileNameWithoutExtension(file))),
 					path = file
 				});
 			});
@@ -956,7 +966,7 @@ internal sealed class WebView : IDisposable {
 
 			string? twinFile = filesByDir.TryGetValue(currentDir, out var currentFiles)
 				? currentFiles.FirstOrDefault(f =>
-					Path.GetFileNameWithoutExtension(f)
+					GetSwitchVariantBaseName(Path.GetFileNameWithoutExtension(f))
 						.Equals(Path.GetFileName(dir), StringComparison.OrdinalIgnoreCase))
 				: null;
 
@@ -1002,6 +1012,68 @@ internal sealed class WebView : IDisposable {
 		);
 		return WebUtility.HtmlDecode(normalized);
 	}
+	string GetSwitchVariantGroupKey(string file) {
+		string dir = Path.GetDirectoryName(file) ?? "";
+		string ext = Path.GetExtension(file);
+		string baseName = GetSwitchVariantBaseName(Path.GetFileNameWithoutExtension(file));
+		return $"{dir}|{ext}|{baseName}";
+	}
+	static string GetSwitchVariantBaseName(string name) {
+		string current = name;
+		while (true) {
+			Match match = Regex.Match(current, @"^(?<base>.+?)\s*\[(?<variant>[^\]]+)\]\s*$");
+			if (!match.Success) return current.TrimEnd();
+
+			string variant = NormalizeSwitchVariant(match.Groups["variant"].Value);
+			if (!IsKnownSwitchVariant(variant)) return current.TrimEnd();
+
+			current = match.Groups["base"].Value;
+		}
+	}
+	static int GetSwitchVariantPreference(string file) {
+		List<string> variants = GetSwitchVariants(Path.GetFileNameWithoutExtension(file));
+		bool hasWindows = variants.Contains("windows");
+		bool hasBlueprint = variants.Contains("blueprint");
+
+		if (hasWindows && hasBlueprint) return 0;
+		if (hasWindows) return 1;
+		if (hasBlueprint) return 2;
+		if (variants.Count == 0) return 3;
+		if (variants.Contains("c++") || variants.Contains("cpp") || variants.Contains("cplusplus")) return 4;
+		if (variants.Contains("linux")) return 5;
+		if (variants.Contains("macos") || variants.Contains("mac") || variants.Contains("apple")) return 6;
+		return 10;
+	}
+	static List<string> GetSwitchVariants(string name) {
+		var variants = new List<string>();
+		string current = name;
+		while (true) {
+			Match match = Regex.Match(current, @"^(?<base>.+?)\s*\[(?<variant>[^\]]+)\]\s*$");
+			if (!match.Success) return variants;
+
+			string variant = NormalizeSwitchVariant(match.Groups["variant"].Value);
+			if (!IsKnownSwitchVariant(variant)) return variants;
+
+			variants.Add(variant);
+			current = match.Groups["base"].Value;
+		}
+	}
+	static string NormalizeSwitchVariant(string value) {
+		string normalized = value.Trim().Trim('-').Trim().ToLowerInvariant();
+		return normalized switch {
+			"mac os" => "macos",
+			"mac-os" => "macos",
+			"mac_os" => "macos",
+			"c plus plus" => "cplusplus",
+			"c-plus-plus" => "cplusplus",
+			"c_plus_plus" => "cplusplus",
+			_ => normalized
+		};
+	}
+	static bool IsKnownSwitchVariant(string variant) {
+		return variant is "windows" or "linux" or "macos" or "mac" or "apple" or
+			"blueprint" or "c++" or "cpp" or "cplusplus";
+	}
 	byte[] LoadEmbeddedBytes(string resourceName){
 		var asm = typeof(WebView).Assembly;
 		string resName = asm
@@ -1024,6 +1096,11 @@ internal sealed class WebView : IDisposable {
 	string FindFirstFile(string root) {
 		if (isFirstFileInit) return FirstFile;
 		var files = Directory.GetFiles(root, "*.mhtml", SearchOption.AllDirectories)
+			.GroupBy(GetSwitchVariantGroupKey, StringComparer.OrdinalIgnoreCase)
+			.Select(g => g
+				.OrderBy(GetSwitchVariantPreference)
+				.ThenBy(f => f, StringComparer.OrdinalIgnoreCase)
+				.First())
 			.OrderBy(f => ExtractNumber(Path.GetFileName(f)))
 			.ThenBy(f => f);
 		if (files.Any()) FirstFile = files.First();
