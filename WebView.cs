@@ -24,6 +24,7 @@ internal sealed class WebView : IDisposable {
 	const string GetTitleRes = "GetTitle.js";
 	const string EpicSwitchRes = "EpicSwitch.js";
 	const string EpicCodeRes = "EpicCode.js";
+	const string EpicBlueprintRes = "EpicBlueprint.js";
 	const string EpicComparisonSliderRes = "EpicComparisonSlider.js";
 	const string EpicSliderSequenceRes = "EpicSliderSequence.js";
 	const string ToggleSidebarRes = "ToggleSideBar.js";
@@ -410,6 +411,9 @@ internal sealed class WebView : IDisposable {
 	async Task InjectEpicCode() {
 		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(EpicCodeRes));
 	}
+	async Task InjectEpicBlueprint() {
+		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(EpicBlueprintRes));
+	}
 	async Task InjectEpicComparisonSlider() {
 		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(EpicComparisonSliderRes));
 	}
@@ -549,6 +553,7 @@ internal sealed class WebView : IDisposable {
 			await InjectToggleButton();
 			await InjectEpicSwitch();
 			await InjectEpicCode();
+			await InjectEpicBlueprint();
 			await InjectEpicComparisonSlider();
 			await InjectEpicSliderSequence();
 			if (!string.IsNullOrWhiteSpace(pendingFragment)) {

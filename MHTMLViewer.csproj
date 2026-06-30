@@ -40,6 +40,7 @@
 		<EmbeddedResource Include="GetTitle.js" />
 		<EmbeddedResource Include="EpicSwitch.js" />
 		<EmbeddedResource Include="EpicCode.js" />
+		<EmbeddedResource Include="EpicBlueprint.js" />
 		<EmbeddedResource Include="EpicComparisonSlider.js" />
 		<EmbeddedResource Include="EpicSliderSequence.js" />
 		<EmbeddedResource Include="ToggleSideBar.js" />
