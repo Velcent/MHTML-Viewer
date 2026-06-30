@@ -24,6 +24,7 @@ internal sealed class WebView : IDisposable {
 	const string GetTitleRes = "GetTitle.js";
 	const string EpicSwitchRes = "EpicSwitch.js";
 	const string EpicCodeRes = "EpicCode.js";
+	const string EpicComparisonSliderRes = "EpicComparisonSlider.js";
 	const string ToggleSidebarRes = "ToggleSideBar.js";
 	const string DocumentResourceHost = "mhtml.local";
 	const string LocalMediaHost = "media.local";
@@ -408,6 +409,9 @@ internal sealed class WebView : IDisposable {
 	async Task InjectEpicCode() {
 		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(EpicCodeRes));
 	}
+	async Task InjectEpicComparisonSlider() {
+		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(EpicComparisonSliderRes));
+	}
 	async Task ToggleSidebar() {
 		State.Current.collapsed = !State.Current.collapsed;
 		State.Save(State.Current);
@@ -541,6 +545,7 @@ internal sealed class WebView : IDisposable {
 			await InjectToggleButton();
 			await InjectEpicSwitch();
 			await InjectEpicCode();
+			await InjectEpicComparisonSlider();
 			if (!string.IsNullOrWhiteSpace(pendingFragment)) {
 				string fragment = pendingFragment;
 				pendingFragment = string.Empty;
