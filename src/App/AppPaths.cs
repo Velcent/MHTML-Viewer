@@ -1,3 +1,6 @@
+/// <summary>
+/// Centralizes filesystem paths that are shared across startup, state, and WebView2 initialization.
+/// </summary>
 internal static class AppPaths {
 	public const string AppFolderName = "MHTMLViewer";
 
@@ -6,5 +9,8 @@ internal static class AppPaths {
 	/// </summary>
 	public static string TempDirectory => Path.Combine(Path.GetTempPath(), AppFolderName);
 
+	/// <summary>
+	/// JSON file that stores the last UI state between viewer sessions.
+	/// </summary>
 	public static string StateFile => Path.Combine(TempDirectory, "state.json");
 }

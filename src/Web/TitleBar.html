@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Title bar WebView: replaces the native title bar and forwards window commands to C#. -->
 <html>
 
 <head>
@@ -165,6 +166,7 @@
 	</div>
 
 	<script>
+		// Commands are handled by WebView.TitleWebMessageReceived.
 		const host = chrome.webview;
 		const titleEl = document.getElementById("title");
 		let lastIsAnimate = true;
@@ -185,9 +187,10 @@
 			host.postMessage({ type: "close" });
 		}
 
-		// === API dari C# ===
+		// Public API called from C# through ExecuteScriptAsync.
 
 		function setTitle(title, isAnimate) {
+			// Called after document scripts report a breadcrumb/section title.
 			if (title === currentTitle) return;
 			currentTitle = title;
 			cancelTitle();
@@ -214,6 +217,7 @@
 		}
 
 		function animateTitle(title) {
+			// FLIP-style animation keeps title movement smooth when breadcrumb text changes.
 			titleEl.style.transition = "opacity 0.25s ease";
 			titleEl.innerHTML = title;
 			last = titleEl.getBoundingClientRect();
@@ -259,21 +263,21 @@
 			}, 300);
 		}
 
-		// === drag ===
+		// Native drag/maximize bridge.
 		const drag = document.getElementById("dragArea");
 
 		let lastClick = 0;
 		drag.addEventListener("mousedown", e => {
-			// handle link click
+			// Breadcrumb links are forwarded to the C# navigation pipeline.
 			const el = e.target.closest('[data-link]');
 			if (el) {
 				const url = el.getAttribute('href');
 				if (url) host.postMessage({ type: "OpenLink", url: url });
 				return;
 			}
-			// handle drag
+			// The host performs native dragging so the borderless window behaves like a normal title bar.
 			host.postMessage({ type: "drag" });
-			// handle double click to toggle maximize
+			// Double-click toggles maximize, matching standard Windows title-bar behavior.
 			const now = Date.now();
 			if (now - lastClick < 300) {
 				host.postMessage({ type: "toggleMaximize" });

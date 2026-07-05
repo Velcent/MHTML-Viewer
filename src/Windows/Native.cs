@@ -1,6 +1,10 @@
 using System.Runtime.InteropServices;
 
+/// <summary>
+/// Thin P/Invoke surface used by the custom Win32 window host.
+/// </summary>
 internal static partial class Native {
+	// Window messages handled by WebView.WndProc.
 	public const int WM_APP = 0x8000;
 	public const int WM_CUSTOM = WM_APP + 1;
 	public const int WM_ACTIVATE = 0x0006;
@@ -10,6 +14,7 @@ internal static partial class Native {
 	public const int WM_NCHITTEST = 0x0084;
 	public const int WM_NCLBUTTONDOWN = 0x00A1;
 
+	// Hit-test return values used to keep resize behavior with a borderless title bar.
 	public const int HTCLIENT = 1;
 	public const int HTCAPTION = 2;
 	public const int HTLEFT = 10;
@@ -25,6 +30,7 @@ internal static partial class Native {
 	public const int SM_CYSCREEN = 1;
 	public const int GWL_STYLE = -16;
 
+	// Window style flags configured after CreateWindowEx.
 	public const int WS_CAPTION = 0x00C00000;
 	public const int WS_THICKFRAME = 0x00040000;
 	public const int WS_MAXIMIZEBOX = 0x00010000;
@@ -42,10 +48,12 @@ internal static partial class Native {
 	public const uint SWP_NOZORDER = 0x0004;
 	public const uint SWP_FRAMECHANGED = 0x0020;
 
+	/// <summary>Shows a modal error dialog owned by the main window.</summary>
 	public static void ShowMessage(IntPtr owner, string text, string caption) {
 		MessageBox(owner, text, caption, 0x00000010);
 	}
 
+	/// <summary>Runs the native UI loop until WM_QUIT is posted.</summary>
 	public static void RunMessageLoop() {
 		while (GetMessage(out MSG msg, IntPtr.Zero, 0, 0) > 0) {
 			TranslateMessage(ref msg);
@@ -55,6 +63,7 @@ internal static partial class Native {
 
 	public delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
+	// User32/GDI imports are kept in one file so the rest of the app stays managed and readable.
 	[DllImport("user32.dll")]
 	public static extern int GetSystemMetrics(int nIndex);
 
@@ -157,6 +166,7 @@ internal static partial class Native {
 	[DllImport("user32.dll")]
 	public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
 
+	/// <summary>Native window class registration data passed to RegisterClassW.</summary>
 	[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
 	public struct WNDCLASS {
 		public int style;
@@ -171,6 +181,7 @@ internal static partial class Native {
 		public string lpszClassName;
 	}
 
+	/// <summary>Message data consumed by the Win32 message loop.</summary>
 	public struct MSG {
 		public IntPtr hwnd;
 		public uint message;
@@ -181,6 +192,7 @@ internal static partial class Native {
 		public int pt_y;
 	}
 
+	/// <summary>Non-client resize data used when removing the default Windows title bar.</summary>
 	[StructLayout(LayoutKind.Sequential)]
 	public struct NCCALCSIZE_PARAMS {
 		public RECT rgrc0;
@@ -189,6 +201,7 @@ internal static partial class Native {
 		public IntPtr lppos;
 	}
 
+	/// <summary>Win32 rectangle with inclusive left/top and exclusive right/bottom bounds.</summary>
 	[StructLayout(LayoutKind.Sequential)]
 	public struct RECT {
 		public int Left;

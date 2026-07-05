@@ -1,7 +1,11 @@
+/*
+ * Enhances archived code snippets with syntax highlighting, line numbers, copy, and expand/collapse actions.
+ */
 (function () {
 	if (window.__mhtmlEpicCodeReady) return;
 	window.__mhtmlEpicCodeReady = true;
 
+	// Small tokenizer dictionaries for common C++, Python, and Unreal symbols used in documentation snippets.
 	const collapsedLines = 14;
 	const expandedText = "Collapse code";
 	const collapsedText = "Expand code";
@@ -32,6 +36,7 @@
 	setupPlainSnippets();
 
 	function injectStyle() {
+		// The script can be injected after each document load; keep the stylesheet singleton.
 		if (document.getElementById("mhtml-epic-code-style")) return;
 		const style = document.createElement("style");
 		style.id = "mhtml-epic-code-style";
@@ -189,6 +194,7 @@
 	}
 
 	function setupPlainSnippets() {
+		// Some archived pages contain plain <pre> blocks instead of Epic custom elements; wrap them.
 		for (const pre of document.querySelectorAll("pre.block-code-snippet-plain")) {
 			if (pre.closest("block-code-snippet")) continue;
 			const snippet = document.createElement("block-code-snippet");
@@ -217,6 +223,7 @@
 	}
 
 	function setupSnippet(snippet) {
+		// Normalize multiple source markup shapes into one consistent snippet UI.
 		if (snippet.dataset.mhtmlCodeReady === "true") return;
 		const code = snippet.querySelector("code");
 		const preBlock = snippet.querySelector(".pre-block");
@@ -412,6 +419,7 @@
 	}
 
 	function colorize(text, language) {
+		// Tokenization stays intentionally simple so it works without a large syntax-highlighting dependency.
 		let output = "";
 		let i = 0;
 		while (i < text.length) {

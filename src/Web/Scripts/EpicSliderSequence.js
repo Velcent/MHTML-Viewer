@@ -1,3 +1,6 @@
+/*
+ * Restores Epic's image sequence slider for archived pages.
+ */
 (function () {
 	if (window.__mhtmlEpicSliderSequenceReady) return;
 	window.__mhtmlEpicSliderSequenceReady = true;
@@ -6,6 +9,7 @@
 	setupSliderSequences();
 
 	function injectStyle() {
+		// Styles are injected once because this script can be reinjected after WebView navigation.
 		if (document.getElementById("mhtml-epic-slider-sequence-style")) return;
 		const style = document.createElement("style");
 		style.id = "mhtml-epic-slider-sequence-style";
@@ -53,6 +57,7 @@
 	}
 
 	function setupSequence(root) {
+		// Each sequence owns one range input that switches visible images by index.
 		if (root.dataset.mhtmlSliderSequenceReady === "true") return;
 		const imgList = root.querySelector(".img-list");
 		if (!imgList) return;
@@ -119,6 +124,7 @@
 	}
 
 	function preloadImages(root, images) {
+		// Preload all frames so dragging the range input does not flash unloaded images.
 		const load = () => {
 			for (const image of images) {
 				const src = image.getAttribute("src");

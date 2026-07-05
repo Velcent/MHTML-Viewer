@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Sidebar WebView: renders the document tree, search, loading state, and history controls. -->
 <html>
 
 <head>
@@ -259,6 +260,7 @@
 	</div>
 
 	<script>
+		// C# calls initTree/setActiveByPath and receives user actions through chrome.webview messages.
 		const tree = document.getElementById("tree");
 		const errorBox = document.getElementById("error");
 		const resizeHandle = document.getElementById("resizeHandle");
@@ -270,6 +272,7 @@
 		const ARROW_OPEN = "\u2b9f";
 
 		function initTree(data, firstPath, state) {
+			// Render cached tree data, restore persisted state, then open the best initial document.
 			renderTree(data);
 			const lastNode = state.lastFile ? findNodeByPath(state.lastFile) : null;
 			const target = lastNode ? state.lastFile : firstPath;
@@ -299,6 +302,7 @@
 		}
 
 		function createNode(node) {
+			// Node JSON comes from DocumentTreeBuilder and keeps camelCase names for this script.
 			const item = document.createElement("div");
 			item.className = "item";
 			item.dataset.name = node.name.toLowerCase();
@@ -374,6 +378,7 @@
 		}
 
 		function resizeSidebar(width) {
+			// C# clamps and persists this value too; clamping here keeps drag feedback stable.
 			const nextWidth = Math.max(220, Math.min(720, Math.round(width)));
 			sidebarWidth = nextWidth;
 			sendMessage({ type: "resizeSidebar", width: nextWidth });
@@ -448,6 +453,7 @@
 		}
 
 		document.getElementById("search").addEventListener("input", e => {
+			// Search hides non-matching rows and expands matching ancestors so results are visible.
 			const q = e.target.value.trim().toLowerCase();
 			if (!q) {
 				allElements.forEach(el => {

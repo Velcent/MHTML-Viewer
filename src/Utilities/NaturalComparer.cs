@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 /// </summary>
 internal sealed class NaturalComparer : IComparer<string> {
 	public int Compare(string? a, string? b) {
+		// Split into alternating text and numeric tokens so numeric parts compare by value.
 		string[] left = Regex.Split(a ?? "", @"(\d+)");
 		string[] right = Regex.Split(b ?? "", @"(\d+)");
 		int length = Math.Max(left.Length, right.Length);

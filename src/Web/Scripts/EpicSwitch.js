@@ -1,7 +1,11 @@
+/*
+ * Recreates Epic's platform switcher controls in static/offline pages.
+ */
 (function () {
 	if (window.__mhtmlEpicSwitchReady) return;
 	window.__mhtmlEpicSwitchReady = true;
 
+	// Normalize captured platform keys into labels that are shown in the custom dropdown.
 	const optionNames = {
 		windows: "Windows",
 		linux: "Linux",
@@ -51,6 +55,7 @@
 	const options = collectOptions(views);
 	if (!options.length) return;
 
+	// Use the captured selected label when possible; otherwise fall back to the first available variant.
 	let selected = readInitialSelection() || options[0].key;
 	if (!options.some(option => option.key === selected)) selected = options[0].key;
 
@@ -64,6 +69,7 @@
 	});
 
 	function collectOptions(items) {
+		// The source page stores variants on block-switch-view nodes; duplicate keys are ignored.
 		const map = new Map();
 		for (const view of items) {
 			const key = readViewOption(view);
@@ -135,6 +141,7 @@
 	}
 
 	function applySelection(key) {
+		// Selection updates both controls and content panes so the static page behaves like the live site.
 		const label = options.find(option => option.key === key)?.label || toTitle(key);
 		for (const control of controls) {
 			const labelEl = control.querySelector(".ng-value-label");

@@ -1,3 +1,6 @@
+/*
+ * Restores before/after comparison sliders in static Epic documentation captures.
+ */
 (function () {
 	if (window.__mhtmlEpicComparisonSliderReady) return;
 	window.__mhtmlEpicComparisonSliderReady = true;
@@ -136,6 +139,7 @@
 	}
 
 	function setupSlider(root) {
+		// Captured markup may be incomplete, so missing controls/wrappers are created defensively.
 		if (root.dataset.mhtmlComparisonReady === "true") return;
 		const images = Array.from(root.querySelectorAll("img"));
 		if (images.length < 2) return;
@@ -179,6 +183,7 @@
 		update();
 
 		function applyValue(value) {
+			// Both image panes are translated from the same slider value to create the reveal effect.
 			const amount = Math.max(0, Math.min(100, value));
 			input.value = String(amount);
 			imgBefore.style.setProperty("transform", `translateX(${100 - amount}%)`);
@@ -202,6 +207,7 @@
 	}
 
 	function bindPointerDrag(root, input, applyValue) {
+		// Pointer events make the entire comparison area draggable, not just the hidden range input.
 		let dragging = false;
 
 		root.addEventListener("pointerdown", event => {

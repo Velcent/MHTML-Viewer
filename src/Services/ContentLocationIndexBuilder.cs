@@ -1,6 +1,9 @@
 using System.Collections.Concurrent;
 using System.Text;
 
+/// <summary>
+/// Builds the reverse lookup used when links inside an archived page point back to captured URLs.
+/// </summary>
 internal static class ContentLocationIndexBuilder {
 	const string SnapshotLocationHeader = "Snapshot-Content-Location:";
 
@@ -11,6 +14,7 @@ internal static class ContentLocationIndexBuilder {
 		var map = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		if (!Directory.Exists(root)) return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+		// Each MHTML file stores the original captured URL near the top, so a small prefix read is enough.
 		Parallel.ForEach(
 			Directory.EnumerateFiles(root, "*.mhtml", SearchOption.AllDirectories),
 			file => TryAddFile(map, file)
@@ -19,6 +23,9 @@ internal static class ContentLocationIndexBuilder {
 		return map.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
 	}
 
+	/// <summary>
+	/// Normalizes captured URLs so equivalent links with query strings or fragments resolve to the same file.
+	/// </summary>
 	public static string NormalizeUrl(string url) {
 		if (string.IsNullOrWhiteSpace(url)) return string.Empty;
 
@@ -31,6 +38,7 @@ internal static class ContentLocationIndexBuilder {
 	}
 
 	static void TryAddFile(ConcurrentDictionary<string, string> map, string file) {
+		// The snapshot header is emitted before the MIME body; reading the first 512 bytes avoids full-file IO.
 		Span<byte> buffer = stackalloc byte[512];
 		using var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, 512, FileOptions.SequentialScan);
 

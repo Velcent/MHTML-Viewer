@@ -1,5 +1,8 @@
 using System.Text;
 
+/// <summary>
+/// Handles the binary cache that speeds up startup by skipping repeated filesystem scans.
+/// </summary>
 internal static class ViewerCacheStore {
 	public const string FileName = "viewer-cache.bin";
 
@@ -17,6 +20,7 @@ internal static class ViewerCacheStore {
 			using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan);
 			using var reader = new BinaryReader(fs, Encoding.UTF8);
 
+			// Magic and version guard the app from reading stale binary layouts.
 			if (!reader.ReadString().Equals(Magic, StringComparison.Ordinal)) return false;
 			if (reader.ReadInt32() != Version) return false;
 
@@ -48,6 +52,7 @@ internal static class ViewerCacheStore {
 	}
 
 	static void WriteStringDictionary(BinaryWriter writer, Dictionary<string, string> items) {
+		// Count-prefixed collections keep the binary format compact and easy to read back sequentially.
 		writer.Write(items.Count);
 		foreach (var kv in items) {
 			writer.Write(kv.Key);
@@ -83,6 +88,7 @@ internal static class ViewerCacheStore {
 	}
 
 	static void WriteNode(BinaryWriter writer, Node node) {
+		// Children are optional so leaf nodes do not pay for an empty list in the cache.
 		writer.Write(node.Name);
 		writer.Write(node.Path);
 		writer.Write(node.KeepNumbering);

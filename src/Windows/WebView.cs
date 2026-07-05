@@ -6,6 +6,9 @@ using System.Text.RegularExpressions;
 using Microsoft.Web.WebView2.Core;
 using System.Net;
 
+/// <summary>
+/// Main desktop shell that hosts three WebView2 surfaces: title bar, sidebar, and document viewer.
+/// </summary>
 internal sealed class WebView : IDisposable {
 	const int InitialWidth = 1900;
 	const int InitialHeight = 1000;
@@ -64,6 +67,9 @@ internal sealed class WebView : IDisposable {
 
 	public IntPtr Handle => handle;
 
+	/// <summary>
+	/// Registers and creates the borderless Win32 host window used by all WebView2 controllers.
+	/// </summary>
 	public void Create() {
 		wndProcDelegate = WndProc;
 		Native.ExtractIconEx(Environment.ProcessPath!, 0, out largeIcon, out smallIcon, 1);
@@ -78,6 +84,7 @@ internal sealed class WebView : IDisposable {
 		Native.RegisterClass(ref wc);
 		int screenWidth = Native.GetSystemMetrics(Native.SM_CXSCREEN);
 		int screenHeight = Native.GetSystemMetrics(Native.SM_CYSCREEN);
+		// Use a centered desktop window when the screen is large enough; otherwise fill the display.
 		if (InitialWidth < screenWidth) {
 			int x = (screenWidth - InitialWidth) / 2;
 			int y = (screenHeight - InitialHeight) / 2;
@@ -113,6 +120,10 @@ internal sealed class WebView : IDisposable {
 		Native.SetWindowLong(handle, Native.GWL_STYLE, style);
 		Native.SetWindowPos(handle, IntPtr.Zero, 0, 0, 0, 0, Native.SWP_NOSIZE | Native.SWP_NOMOVE | Native.SWP_FRAMECHANGED);
 	}
+
+	/// <summary>
+	/// Handles native window messages that cannot be delegated to WebView2.
+	/// </summary>
 	IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam) {
 		switch (msg) {
 			case Native.WM_ACTIVATE:
@@ -126,6 +137,7 @@ internal sealed class WebView : IDisposable {
 				int x = (short)(lParam.ToInt32() & 0xFFFF);
 				int y = (short)((lParam.ToInt32() >> 16) & 0xFFFF);
 
+				// Borderless windows must return resize hit-test values manually.
 				bool onLeft = x >= r.Left && x < r.Left + resizeBorder;
 				bool onRight = x <= r.Right && x > r.Right - resizeBorder;
 				bool onTop = y >= r.Top && y < r.Top + resizeBorder;
@@ -144,6 +156,7 @@ internal sealed class WebView : IDisposable {
 				return Native.HTCLIENT;
 			case Native.WM_NCCALCSIZE:
 				if (wParam != IntPtr.Zero) {
+					// Shrink the non-client area so Windows keeps resizing semantics without drawing a title bar.
 					var p = Marshal.PtrToStructure<Native.NCCALCSIZE_PARAMS>(lParam);
 					p.rgrc0.Top += 1;
 					Marshal.StructureToPtr(p, lParam, false);
@@ -157,12 +170,17 @@ internal sealed class WebView : IDisposable {
 				Native.PostQuitMessage(0);
 				return IntPtr.Zero;
 			case Native.WM_CUSTOM:
+				// Posted by SyncContext to run async continuations on the UI thread.
 				SyncContext.DispatchQueuedCallbacks();
 				return IntPtr.Zero;
 			default:
 				return Native.DefWindowProc(hWnd, msg, wParam, lParam);
 		}
 	}
+
+	/// <summary>
+	/// Recomputes the three WebView2 controller bounds after resize, maximize, or sidebar changes.
+	/// </summary>
 	void ResizeWebView() {
 		if (navController == null || viewerController == null || titleController == null || handle == IntPtr.Zero) return;
 		Native.GetClientRect(handle, out var rect);
@@ -172,26 +190,28 @@ internal sealed class WebView : IDisposable {
 		int sidebarW = State.Current.Collapsed ? 0 : State.Current.SidebarWidth;
 		bool isMax = Native.IsZoomed(handle);
 		int border = isMax ? ResizeBorder + 5 : ResizeBorder;
-		// TitleBar
+		// Title bar spans the top; sidebar and viewer share the remaining content height.
 		titleController.Bounds = new Rectangle(
 			border,
 			isMax ? border : 0,
 			width - (border * 2),
 			TitleBarHeight
 		);
-		// Sidebar
 		navController.Bounds = new Rectangle(
 			border,
 			isMax ? TitleBarHeight + border : TitleBarHeight,
 			sidebarW, contentHeight - border
 		);
-		// Viewer
 		viewerController.Bounds = new Rectangle(
 			sidebarW + border,
 			isMax ? TitleBarHeight + border : TitleBarHeight,
 			width - sidebarW - (border * 2), contentHeight - border
 		);
 	}
+
+	/// <summary>
+	/// Creates WebView2 controllers, loads embedded UI, builds indexes/cache, and initializes the sidebar.
+	/// </summary>
 	public async Task InitializeAsync() {
 		workspaceRoot = Directory.GetCurrentDirectory();
 		baseRoot = Path.Combine(workspaceRoot, "mhtml");
@@ -214,6 +234,7 @@ internal sealed class WebView : IDisposable {
 
 		ResizeWebView();
 
+		// The three WebViews have different UX roles, so settings and zoom are tuned independently.
 		navWeb.Settings.AreDevToolsEnabled = false;
 		viewerWeb.Settings.AreDevToolsEnabled = false;
 		titleWeb.Settings.AreDevToolsEnabled = false;
@@ -233,6 +254,7 @@ internal sealed class WebView : IDisposable {
 		viewerWeb.WebMessageReceived += ViewerWebMessageReceived;
 		viewerWeb.WebResourceRequested += ViewerWebResourceRequested;
 
+		// The title bar is available first so startup progress can be shown while indexes load.
 		titleWeb.NavigateToString(EmbeddedResourceLoader.LoadText(TitleBarRes));
 		await SetIcon($"data:{GetMime(IconRes)};base64,{Convert.ToBase64String(EmbeddedResourceLoader.LoadBytes(IconRes))}");
 		_ = GetTitleLoop();
@@ -246,6 +268,7 @@ internal sealed class WebView : IDisposable {
 		await ShowTitleLoading(60, "Loading Cache...");
 		string cachePath = Path.Combine(workspaceRoot, "assets", ViewerCacheStore.FileName);
 		if (!ViewerCacheStore.TryLoad(cachePath, out ViewerCacheData viewerCache)) {
+			// Cache miss: rebuild both the URL lookup and sidebar tree from the mhtml directory.
 			await ShowTitleLoading(50, "Building Link Index...");
 			foreach (var kv in ContentLocationIndexBuilder.Build(baseRoot)) {
 				contentLocationMap.TryAdd(kv.Key, kv.Value);
@@ -278,6 +301,7 @@ internal sealed class WebView : IDisposable {
 		string stateJson = JsonSerializer.Serialize(State.Current, AppJsonContext.Default.AppState);
 
 		navWeb.NavigationCompleted += async (_, _) => {
+			// Sidebar JS owns tree rendering; C# only sends the prepared data once the page is ready.
 			await navWeb.ExecuteScriptAsync($@"
 				initTree({treeJson}, {firstJson}, {stateJson});
 			");
@@ -285,6 +309,10 @@ internal sealed class WebView : IDisposable {
 		};
 		navWeb.NavigateToString(EmbeddedResourceLoader.LoadText(SidebarRes));
 	}
+
+	/// <summary>
+	/// Returns a content type for resources injected into WebView2.
+	/// </summary>
 	string GetMime(string fileName) {
 		string ext = Path.GetExtension(fileName).ToLowerInvariant();
 		return ext switch {
@@ -298,12 +326,17 @@ internal sealed class WebView : IDisposable {
 		};
 	}
 	void ConfigureLocalMediaHost(CoreWebView2 web) {
+		// media.local exposes files from the workspace while TryResolveLocalMediaPath enforces root bounds.
 		web.SetVirtualHostNameToFolderMapping(
 			LocalMediaHost,
 			workspaceRoot,
 			CoreWebView2HostResourceAccessKind.Allow
 		);
 	}
+
+	/// <summary>
+	/// Polls the active document for its visible section title and mirrors it into the custom title bar.
+	/// </summary>
 	async Task GetTitleLoop() {
 		while (true) {
 			if (isTitleInit) await UpdateJsTitle();
@@ -325,8 +358,13 @@ internal sealed class WebView : IDisposable {
 			string animateJson = animate.ToString().ToLowerInvariant();
 			await viewerWeb!.ExecuteScriptAsync($"if (typeof getTitle === 'function') getTitle({animateJson});");
 		} catch {
+			// Documents may not have the title helper injected yet; the next loop tick will retry.
 		}
 	}
+
+	/// <summary>
+	/// Builds breadcrumb-style title HTML from the sidebar tree, falling back to the file name.
+	/// </summary>
 	string BuildTitle(string file) {
 		if (!string.IsNullOrWhiteSpace(file) &&
 			titleCache.TryGetValue(file, out string? cachedTitle)) {
@@ -373,6 +411,10 @@ internal sealed class WebView : IDisposable {
 		chain = best ?? new List<Node>();
 		return best != null;
 	}
+
+	/// <summary>
+	/// Depth-first search that keeps the longest matching tree path for breadcrumb titles.
+	/// </summary>
 	static void FindNodeChain(Node node, string file, List<Node> current, ref List<Node>? best) {
 		current.Add(node);
 		if (!string.IsNullOrWhiteSpace(node.Path) &&
@@ -421,6 +463,10 @@ internal sealed class WebView : IDisposable {
 	async Task InjectEpicSliderSequence() {
 		await viewerWeb!.ExecuteScriptAsync(EmbeddedResourceLoader.LoadText(EpicSliderSequenceRes));
 	}
+
+	/// <summary>
+	/// Toggles sidebar state in both persisted state and live WebView layout.
+	/// </summary>
 	async Task ToggleSidebar() {
 		State.Current.Collapsed = !State.Current.Collapsed;
 		State.Save(State.Current);
@@ -438,6 +484,7 @@ internal sealed class WebView : IDisposable {
 		await titleWeb!.ExecuteScriptAsync($"setMaximized({isMax.ToString().ToLower()});");
 	}
 	async void ViewerWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e) {
+		// Document scripts only send title updates; navigation commands are handled by the title/sidebar views.
 		var json = JsonDocument.Parse(e.WebMessageAsJson);
 		var type = json.RootElement.GetProperty("type").GetString();
 		switch (type) {
@@ -452,6 +499,10 @@ internal sealed class WebView : IDisposable {
 				break;
 		}
 	}
+
+	/// <summary>
+	/// Handles commands from the custom title bar: links, drag, minimize, maximize, and close.
+	/// </summary>
 	async void TitleWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e) {
 		using var msg = JsonDocument.Parse(e.WebMessageAsJson);
 		string type = msg.RootElement.GetProperty("type").GetString() ?? "";
@@ -482,6 +533,10 @@ internal sealed class WebView : IDisposable {
 				break;
 		}
 	}
+
+	/// <summary>
+	/// Handles sidebar commands for document opening, history navigation, and resize persistence.
+	/// </summary>
 	async void NavWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e) {
 		try {
 			using var msg = JsonDocument.Parse(e.WebMessageAsJson);
@@ -515,6 +570,10 @@ internal sealed class WebView : IDisposable {
 			await ShowError(ex.Message);
 		}
 	}
+
+	/// <summary>
+	/// Intercepts viewer navigations so archived links resolve to local files instead of the network.
+	/// </summary>
 	async void ViewerNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e) {
 		if (e.Uri == "app://toggleSidebar") {
 			e.Cancel = true;
@@ -526,18 +585,30 @@ internal sealed class WebView : IDisposable {
 		if (e.Uri.StartsWith("about:", StringComparison.OrdinalIgnoreCase)) return;
 		await OpenLink(e);
 	}
+
+	/// <summary>
+	/// Handles media navigations started from frames inside the archived document.
+	/// </summary>
 	async void ViewerFrameNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e) {
 		if (IsDocumentResourceUrl(e.Uri)) return;
 		if (!IsLocalMediaUrl(e.Uri)) return;
 		e.Cancel = true;
 		await OpenLocalMedia(e.Uri);
 	}
+
+	/// <summary>
+	/// Redirects new-window requests for local media back into the main viewer.
+	/// </summary>
 	async void ViewerNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e) {
 		if (IsDocumentResourceUrl(e.Uri)) return;
 		if (!IsLocalMediaUrl(e.Uri)) return;
 		e.Handled = true;
 		await OpenLocalMedia(e.Uri);
 	}
+
+	/// <summary>
+	/// Injects viewer helpers after navigation and applies pending fragment scrolling.
+	/// </summary>
 	async void ViewerNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e) {
 		try {
 			if (viewerWeb?.Source != null && IsLocalMediaUrl(viewerWeb.Source)) {
@@ -550,6 +621,7 @@ internal sealed class WebView : IDisposable {
 			if (string.IsNullOrEmpty(currentFilePath)) return;
 			string pathJson = JsonSerializer.Serialize(currentFilePath, AppJsonContext.Default.String);
 			await navWeb!.ExecuteScriptAsync($"setActiveByPath({pathJson}); hideLoading();");
+			// These scripts progressively enhance static documentation pages after WebView navigation.
 			await InjectGetTitle();
 			await InjectToggleButton();
 			await InjectEpicSwitch();
@@ -569,8 +641,13 @@ internal sealed class WebView : IDisposable {
 				await UpdateJsTitle(false);
 			}
 		} catch {
+			// Navigation completion is best-effort; failed script injection should not close the viewer.
 		}
 	}
+
+	/// <summary>
+	/// Resolves a WebView2 navigation event into local document/media behavior.
+	/// </summary>
 	async Task OpenLink(CoreWebView2NavigationStartingEventArgs e) {
 		if (TryResolveLocalDocument(e.Uri, out string localFile, out string localFragment)) {
 			if (IsHtmlFile(localFile) &&
@@ -603,6 +680,10 @@ internal sealed class WebView : IDisposable {
 		if (await TryNavigateCurrentDocumentFragment(file, fragment)) return;
 		await OpenDocument(file, fragment);
 	}
+
+	/// <summary>
+	/// Resolves a title-bar link click into the same navigation pipeline used by the viewer.
+	/// </summary>
 	async Task OpenLink(string url) {
 		if (TryResolveLocalDocument(url, out string localFile, out string localFragment)) {
 			if (await TryNavigateCurrentDocumentFragment(localFile, localFragment)) return;
@@ -618,6 +699,10 @@ internal sealed class WebView : IDisposable {
 		if (await TryNavigateCurrentDocumentFragment(file, fragment)) return;
 		await OpenDocument(file, fragment);
 	}
+
+	/// <summary>
+	/// Scrolls inside the current document when only the fragment changed.
+	/// </summary>
 	async Task<bool> TryNavigateCurrentDocumentFragment(string file, string fragment, bool addHistory = true) {
 		if (!file.Equals(currentFilePath, StringComparison.OrdinalIgnoreCase)) return false;
 		if (viewerWeb == null) return false;
@@ -656,6 +741,10 @@ internal sealed class WebView : IDisposable {
 		return uri.AbsolutePath.StartsWith("/cid/", StringComparison.OrdinalIgnoreCase)
 			|| uri.AbsolutePath.StartsWith("/document/", StringComparison.OrdinalIgnoreCase);
 	}
+
+	/// <summary>
+	/// Opens local media through the mapped media host after validating the path.
+	/// </summary>
 	async Task OpenLocalMedia(string url, bool addHistory = true) {
 		if (!TryResolveLocalMediaPath(url, out string file)) {
 			await ShowError("Media file not found:\\n" + url);
@@ -674,6 +763,7 @@ internal sealed class WebView : IDisposable {
 		string fullPath = Path.GetFullPath(Path.Combine(workspaceRoot, relativePath));
 		string rootPath = Path.GetFullPath(workspaceRoot);
 		if (!rootPath.EndsWith(Path.DirectorySeparatorChar)) rootPath += Path.DirectorySeparatorChar;
+		// Do not allow crafted media.local URLs to escape the workspace.
 		if (!fullPath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase)) return false;
 		if (!File.Exists(fullPath)) return false;
 
@@ -688,6 +778,7 @@ internal sealed class WebView : IDisposable {
 
 		string fullPath = Path.GetFullPath(uri.LocalPath);
 		if (!IsDocumentFile(fullPath)) return false;
+		// File navigations are limited to workspace documents.
 		if (!IsPathInsideRoot(fullPath, workspaceRoot)) return false;
 		if (!File.Exists(fullPath)) return false;
 
@@ -743,10 +834,12 @@ internal sealed class WebView : IDisposable {
 		viewerWeb!.Navigate(BuildDocumentRootUrl());
 	}
 	string BuildDocumentRootUrl() {
+		// Bump the URL on each MHTML navigation so WebView2 does not reuse a stale document response.
 		int version = ++documentNavigationVersion;
 		return $"https://{DocumentResourceHost}/document/{version}/index.html";
 	}
 	void AddHistory(NavigationEntry entry) {
+		// Avoid duplicate adjacent entries and drop forward history after branching.
 		if (navigationIndex >= 0 &&
 			navigationIndex < navigationHistory.Count &&
 			navigationHistory[navigationIndex].Equals(entry)) {
@@ -774,6 +867,10 @@ internal sealed class WebView : IDisposable {
 		if (await TryNavigateCurrentDocumentFragment(entry.FilePath, entry.Fragment, false)) return;
 		await OpenDocument(entry.FilePath, entry.Fragment, false);
 	}
+
+	/// <summary>
+	/// Sends errors to the sidebar when available, otherwise falls back to a native dialog.
+	/// </summary>
 	async Task ShowError(string message) {
 		string json = JsonSerializer.Serialize(message, AppJsonContext.Default.String);
 		if (navWeb != null) {
@@ -790,10 +887,14 @@ internal sealed class WebView : IDisposable {
 
 		firstFilePath = cache.FirstFile;
 	}
+
+	/// <summary>
+	/// Maps an original captured URL to the local MHTML file and fragment.
+	/// </summary>
 	bool TryResolveMhtml(string url, out string file, out string fragment) {
 		file = string.Empty;
 		fragment = string.Empty;
-		// pisah fragment (#)
+		// Preserve the fragment so the local page can scroll to the same section.
 		int hashIndex = url.IndexOf('#');
 		if (hashIndex >= 0) fragment = url[(hashIndex + 1)..];
 
@@ -802,6 +903,10 @@ internal sealed class WebView : IDisposable {
 		if (contentLocationMap.TryGetValue(baseUrl, out file!)) return true;
 		else return false;
 	}
+
+	/// <summary>
+	/// Serves the current MHTML root document and embedded resources to WebView2.
+	/// </summary>
 	void ViewerWebResourceRequested(object? sender, CoreWebView2WebResourceRequestedEventArgs e) {
 		if (viewerWeb == null || currentDocument == null) return;
 		if (!TryResolveDocumentResource(e.Request.Uri, out var resource)) return;
@@ -825,12 +930,14 @@ internal sealed class WebView : IDisposable {
 		if (Uri.TryCreate(requestUrl, UriKind.Absolute, out var uri) &&
 			uri.Host.Equals(DocumentResourceHost, StringComparison.OrdinalIgnoreCase) &&
 			uri.AbsolutePath.StartsWith("/document/", StringComparison.OrdinalIgnoreCase)) {
+			// The synthetic root URL always returns the parsed HTML for the current MHTML file.
 			resource = new ResourceEntry("text/html; charset=utf-8", document.HtmlBytes, null);
 			return true;
 		}
 
 		string cidPrefix = $"https://{DocumentResourceHost}/cid/";
 		if (requestUrl.StartsWith(cidPrefix, StringComparison.OrdinalIgnoreCase)) {
+			// Rewritten cid: references use this branch.
 			string cid = Uri.UnescapeDataString(requestUrl[cidPrefix.Length..]);
 			return document.ResourcesByCid.TryGetValue(cid, out resource!);
 		}
@@ -840,6 +947,10 @@ internal sealed class WebView : IDisposable {
 	LoadedDocument LoadDocument(string file) {
 		return MhtmlDocumentLoader.Load(file, offlineAssets, DocumentResourceHost);
 	}
+
+	/// <summary>
+	/// Releases WebView2 controllers and unmanaged Win32 resources owned by this shell.
+	/// </summary>
 	public void Dispose() {
 		viewerController?.Close();
 		navController?.Close();

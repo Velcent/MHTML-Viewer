@@ -1,7 +1,11 @@
+/*
+ * Restores Unreal Blueprint snippets/renders in archived Epic documentation.
+ */
 (function () {
 	if (window.__mhtmlEpicBlueprintReady) return;
 	window.__mhtmlEpicBlueprintReady = true;
 
+	// Prefer local mirrored assets first; fall back to Epic CDN when the viewer is online.
 	const jsUrls = [
 		"https://media.local/assets/epic/blueprint_render.min.js",
 		"https://dev.epicgames.com/community/assets/javascript/blueprint_render.min.js"
@@ -19,6 +23,7 @@
 	setupBlueprintCopyButtons();
 
 	function injectStyle() {
+		// Keep a single shared stylesheet even when the script is injected after multiple navigations.
 		if (document.getElementById("mhtml-epic-blueprint-style")) return;
 		const style = document.createElement("style");
 		style.id = "mhtml-epic-blueprint-style";
@@ -80,6 +85,7 @@
 	}
 
 	function setupBlueprintSnippets() {
+		// Some captures preserve only a hidden code block; insert a blueprint-render node before it.
 		const snippets = document.querySelectorAll(
 			'block-snippet-md[snippet-type="blueprint"], block-snippet[snippet-type="blueprint"], .block-snippet[snippet-type="blueprint"]'
 		);
@@ -301,6 +307,7 @@
 	}
 
 	function renderBlueprint(render, target, code) {
+		// Rendering depends on Epic's blueprint library, which may load from local assets or the CDN.
 		if (!window.blueprintUE?.render?.Main) throw new Error("BlueprintUE renderer is unavailable.");
 
 		if (render.__mhtmlBlueprintRenderer?.stop) {
@@ -393,6 +400,7 @@
 	}
 
 	function bindStaticBlueprintInteractions(target) {
+		// Static blueprint canvases get pan/zoom/fullscreen controls so large graphs remain usable offline.
 		const root = target.querySelector(".bue-render");
 		const frame = target.querySelector(".frame");
 		const canvas = target.querySelector(".canvas");

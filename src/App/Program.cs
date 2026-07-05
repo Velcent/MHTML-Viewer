@@ -1,9 +1,14 @@
 using System.Collections.Concurrent;
 
+/// <summary>
+/// Application entry point. On Windows it starts the custom Win32/WebView2 shell;
+/// on other targets it only reports that the UI backend is not available.
+/// </summary>
 internal static class Program {
 	[STAThread]
 	private static void Main() {
 #if WINDOWS
+		// WebView2 and many Win32 APIs require the main thread to remain in an STA message loop.
 		using var app = new WebView();
 		app.Create();
 		SynchronizationContext.SetSynchronizationContext(new SyncContext(app.Handle));
@@ -24,6 +29,9 @@ internal static class Program {
 }
 
 #if WINDOWS
+/// <summary>
+/// Minimal SynchronizationContext that marshals async continuations back through the Win32 message queue.
+/// </summary>
 internal sealed class SyncContext : SynchronizationContext {
 	static readonly ConcurrentQueue<(SendOrPostCallback Callback, object? State)> Queue = new();
 	readonly IntPtr hwnd;
@@ -33,10 +41,14 @@ internal sealed class SyncContext : SynchronizationContext {
 	}
 
 	public override void Post(SendOrPostCallback d, object? state) {
+		// WM_CUSTOM wakes the native message loop so queued managed callbacks run on the UI thread.
 		Queue.Enqueue((d, state));
 		Native.PostMessage(hwnd, Native.WM_CUSTOM, UIntPtr.Zero, IntPtr.Zero);
 	}
 
+	/// <summary>
+	/// Executes all callbacks previously queued by async continuations.
+	/// </summary>
 	public static void DispatchQueuedCallbacks() {
 		while (Queue.TryDequeue(out var work)) {
 			work.Callback(work.State);

@@ -1,4 +1,8 @@
+/*
+ * Injects the slim in-document handle used to toggle the native sidebar from inside the viewer WebView.
+ */
 (function(){
+	// The helper is injected after each navigation, so make it idempotent.
 	if (document.querySelector('.sidebarHandle')) return;
 
 	const style = document.createElement('style');
@@ -51,6 +55,7 @@
 	const handle = document.createElement('div');
 	handle.className = 'sidebarHandle';
 
+	// Navigation to this app:// URL is intercepted by WebView.cs and converted into a sidebar toggle.
 	const btn = document.createElement('a');
 	btn.title = 'Toggle sidebar';
 	btn.href = 'app://toggleSidebar';

@@ -2,11 +2,15 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Text.RegularExpressions;
 
+/// <summary>
+/// Creates the nested sidebar structure from the local documentation folder.
+/// </summary>
 internal static class DocumentTreeBuilder {
 	/// <summary>
 	/// Builds the sidebar tree from local MHTML/HTML files and folds platform/API variants into one entry.
 	/// </summary>
 	public static List<Node> Build(string root) {
+		// Variant files such as "[Windows]" or "[Blueprint]" represent one logical topic in the sidebar.
 		List<string> allFiles = Directory
 			.EnumerateFiles(root, "*.mhtml", SearchOption.AllDirectories)
 			.Concat(Directory.EnumerateFiles(root, "*.html", SearchOption.AllDirectories))
@@ -24,6 +28,9 @@ internal static class DocumentTreeBuilder {
 		return BuildNode(root, filesByDir);
 	}
 
+	/// <summary>
+	/// Finds the first navigable file in tree order so startup has a deterministic default document.
+	/// </summary>
 	public static string FindFirstTreePath(List<Node> nodes) {
 		foreach (Node node in nodes) {
 			if (!string.IsNullOrWhiteSpace(node.Path)) return node.Path;
@@ -36,6 +43,9 @@ internal static class DocumentTreeBuilder {
 		return string.Empty;
 	}
 
+	/// <summary>
+	/// Fallback first-file lookup used when the tree cache is not available.
+	/// </summary>
 	public static string FindFirstFile(string root) {
 		IOrderedEnumerable<string> files = Directory.GetFiles(root, "*.mhtml", SearchOption.AllDirectories)
 			.GroupBy(GetSwitchVariantGroupKey, StringComparer.OrdinalIgnoreCase)
@@ -52,6 +62,7 @@ internal static class DocumentTreeBuilder {
 	static List<Node> BuildNode(string currentDir, Dictionary<string, List<string>> filesByDir) {
 		var items = new ConcurrentBag<Node>();
 
+		// Files and folders are collected in parallel, then sorted once at the end for deterministic output.
 		if (filesByDir.TryGetValue(currentDir, out List<string>? files)) {
 			Parallel.ForEach(files, file => {
 				items.Add(new Node {
@@ -66,6 +77,7 @@ internal static class DocumentTreeBuilder {
 			if (!HasContent(dir, filesByDir)) return;
 
 			List<Node> children = BuildNode(dir, filesByDir);
+			// If a folder has a same-named document, clicking the folder opens that overview page.
 			string? twinFile = filesByDir.TryGetValue(currentDir, out List<string>? currentFiles)
 				? currentFiles.FirstOrDefault(file =>
 					GetSwitchVariantBaseName(Path.GetFileNameWithoutExtension(file))
@@ -84,6 +96,7 @@ internal static class DocumentTreeBuilder {
 	}
 
 	static bool HasContent(string dir, Dictionary<string, List<string>> filesByDir) {
+		// Avoid creating empty directory nodes when no document exists under that branch.
 		return filesByDir.ContainsKey(dir) ||
 			filesByDir.Keys.Any(key =>
 				key.StartsWith(dir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
@@ -121,6 +134,7 @@ internal static class DocumentTreeBuilder {
 	}
 
 	static IOrderedEnumerable<string> SortFilesForTree(string dir, IEnumerable<string> files) {
+		// API reference pages are naturally named by symbol, while tutorial pages often start with numbers.
 		return IsApiReferencePath(dir)
 			? files.OrderBy(file => Path.GetFileNameWithoutExtension(file), new NaturalComparer())
 			: files
@@ -129,6 +143,7 @@ internal static class DocumentTreeBuilder {
 	}
 
 	static List<Node> SortTreeItems(string currentDir, IEnumerable<Node> items) {
+		// Directory nodes win over duplicate file nodes so expandable groups remain visible.
 		IEnumerable<Node> deduped = items
 			.GroupBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
 			.Select(group => group.FirstOrDefault(node => node.Children != null) ?? group.First());
@@ -153,6 +168,7 @@ internal static class DocumentTreeBuilder {
 	}
 
 	static string DecodeTreeName(string name) {
+		// Some generated filenames contain entity-like tokens ending in underscores instead of semicolons.
 		string normalized = Regex.Replace(
 			name,
 			@"&(#\d+|#x[0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]+)_",
@@ -169,6 +185,7 @@ internal static class DocumentTreeBuilder {
 	}
 
 	static string GetSwitchVariantBaseName(string name) {
+		// Strip repeated recognized suffixes: "Foo [Windows] [Blueprint]" becomes "Foo".
 		string current = name;
 		while (true) {
 			Match match = Regex.Match(current, @"^(?<base>.+?)\s*\[(?<variant>[^\]]+)\]\s*$");
@@ -182,6 +199,7 @@ internal static class DocumentTreeBuilder {
 	}
 
 	static int GetSwitchVariantPreference(string file) {
+		// Prefer the most useful local variant for this viewer when multiple captures exist.
 		List<string> variants = GetSwitchVariants(Path.GetFileNameWithoutExtension(file));
 		bool hasWindows = variants.Contains("windows");
 		bool hasBlueprint = variants.Contains("blueprint");
