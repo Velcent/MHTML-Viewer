@@ -1,9 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<Version>1.2606.16.00</Version>
-		<FileVersion>1.2606.16.00</FileVersion>
-		<InformationalVersion>v1.2606.16.00</InformationalVersion>
+		<Version>1.2607.05.00</Version>
+		<FileVersion>1.2607.05.00</FileVersion>
+		<InformationalVersion>v1.2607.05.00</InformationalVersion>
 		<Description>A simple MHTML viewer using WebView2.</Description>
 
 		<OutputType>Exe</OutputType>
@@ -33,7 +33,7 @@
 	</PropertyGroup>
 
 	<ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows'">
-		<PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3912.50" />
+		<PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4022.49" />
 		<EmbeddedResource Include="src\Resources\app.ico" />
 		<EmbeddedResource Include="src\Web\TitleBar.html" />
 		<EmbeddedResource Include="src\Web\SideBar.html" />
