@@ -16,6 +16,7 @@
 	injectStyle();
 	setupBlueprintSnippets();
 	setupBlueprintRenders();
+	setupBlueprintCopyButtons();
 
 	function injectStyle() {
 		if (document.getElementById("mhtml-epic-blueprint-style")) return;
@@ -107,6 +108,153 @@
 		for (const render of renders) {
 			setupBlueprintRender(render);
 		}
+	}
+
+	function setupBlueprintCopyButtons() {
+		const snippets = document.querySelectorAll(
+			"block-code-snippet, block-snippet-md, block-snippet, .block-snippet"
+		);
+		for (const snippet of snippets) {
+			if (!isBlueprintSnippet(snippet)) continue;
+			wireBlueprintCopyButton(snippet);
+		}
+	}
+
+	function isBlueprintSnippet(snippet) {
+		const type = (snippet.getAttribute("snippet-type") || "").toLowerCase();
+		const header = snippet.querySelector(".block-code-snippet-header-type")?.textContent || "";
+		return type === "blueprint"
+			|| /blueprint/i.test(header)
+			|| !!snippet.querySelector("blueprint-render");
+	}
+
+	function wireBlueprintCopyButton(snippet) {
+		const button = findBlueprintCopyButton(snippet) || createBlueprintCopyButton(snippet);
+		if (!button || button.dataset.mhtmlBlueprintCopyReady === "true") return;
+
+		button.dataset.mhtmlBlueprintCopyReady = "true";
+		button.dataset.mhtmlBlueprintOriginalLabel = readCopyButtonLabel(button) || "Copy full snippet";
+		button.dataset.mhtmlBlueprintSuffix = button.querySelector(".ps-1")?.textContent || "";
+		button.addEventListener("click", async event => {
+			event.preventDefault();
+			event.stopPropagation();
+			if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+
+			const source = readBlueprintCopySource(snippet);
+			if (!source) {
+				flashCopyButton(button, "No source found");
+				return;
+			}
+
+			await copyTextToClipboard(source);
+			flashCopyButton(button, "Copied");
+		}, true);
+	}
+
+	function findBlueprintCopyButton(snippet) {
+		const buttons = Array.from(snippet.querySelectorAll("button"));
+		return buttons.find(button => /copy/i.test(button.textContent || "")) || null;
+	}
+
+	function createBlueprintCopyButton(snippet) {
+		if (!snippet.matches("block-code-snippet")) return null;
+
+		let actions = snippet.querySelector(".block-code-snippet-actions");
+		if (!actions) {
+			actions = document.createElement("div");
+			actions.className = "block-code-snippet-actions";
+			snippet.appendChild(actions);
+		}
+
+		const button = document.createElement("button");
+		button.type = "button";
+		button.className = "btn btn-secondary btn-sm";
+		const icon = document.createElement("span");
+		icon.className = "eds-icon icon-stacked-squares icon-default-width icon-pad-right";
+		button.appendChild(icon);
+		button.appendChild(document.createTextNode(" Copy full snippet"));
+		actions.appendChild(button);
+		return button;
+	}
+
+	function readBlueprintCopySource(snippet) {
+		const selectors = [
+			"textarea.mhtml-full-snippet-source",
+			"textarea[data-mhtml-full-source='true']",
+			"textarea[data-blueprint-code]",
+			".visually-hidden",
+			"textarea"
+		];
+
+		for (const selector of selectors) {
+			const element = snippet.querySelector(selector);
+			if (!element) continue;
+			const source = normalizeBlueprintCode("value" in element ? element.value : element.textContent);
+			if (looksLikeBlueprintCode(source)) return source;
+		}
+
+		const render = snippet.querySelector("blueprint-render");
+		return render ? readBlueprintCode(render) : readBlueprintCodeFromSnippet(snippet);
+	}
+
+	function readCopyButtonLabel(button) {
+		return Array.from(button.childNodes)
+			.filter(node => node.nodeType === Node.TEXT_NODE)
+			.map(node => node.textContent || "")
+			.join("")
+			.trim();
+	}
+
+	function flashCopyButton(button, label) {
+		const original = button.dataset.mhtmlBlueprintOriginalLabel || "Copy full snippet";
+		setCopyButtonLabel(button, label);
+		clearTimeout(button.__mhtmlBlueprintCopyTimer);
+		button.__mhtmlBlueprintCopyTimer = setTimeout(() => {
+			setCopyButtonLabel(button, original);
+		}, 1200);
+	}
+
+	function setCopyButtonLabel(button, label) {
+		const icon = findCopyButtonIcon(button);
+		const suffix = button.dataset.mhtmlBlueprintSuffix || "";
+		button.textContent = "";
+		if (icon) button.appendChild(icon);
+		button.appendChild(document.createTextNode(icon ? " " + label : label));
+		if (suffix && /copy/i.test(label)) {
+			const span = document.createElement("span");
+			span.className = "ps-1";
+			span.textContent = suffix;
+			button.appendChild(span);
+		}
+	}
+
+	function findCopyButtonIcon(button) {
+		const icon = button.querySelector(".eds-icon");
+		if (!icon) return null;
+		const wrapper = icon.parentElement;
+		if (wrapper && wrapper !== button && wrapper.children.length === 1) {
+			return wrapper.cloneNode(true);
+		}
+		return icon.cloneNode(true);
+	}
+
+	async function copyTextToClipboard(text) {
+		try {
+			await navigator.clipboard.writeText(text);
+			return;
+		} catch {
+		}
+
+		const input = document.createElement("textarea");
+		input.value = text;
+		input.style.position = "fixed";
+		input.style.left = "-100000px";
+		input.style.top = "0";
+		document.body.appendChild(input);
+		input.focus();
+		input.select();
+		document.execCommand("copy");
+		input.remove();
 	}
 
 	function setupBlueprintRender(render) {

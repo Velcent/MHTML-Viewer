@@ -224,6 +224,7 @@
 
 		snippet.dataset.mhtmlCodeReady = "true";
 		snippet.classList.add("mhtml-code-ready");
+		applyFullSnippetSource(snippet, code);
 
 		if (!preBlock.querySelector(".pre-overlay")) {
 			const overlay = document.createElement("div");
@@ -286,6 +287,8 @@
 			expand.dataset.mhtmlCodeAction = "expand";
 			expand.addEventListener("click", event => {
 				event.preventDefault();
+				const code = snippet.querySelector("code");
+				if (code) applyFullSnippetSource(snippet, code);
 				setExpanded(snippet, !snippet.classList.contains("is-expanded"));
 			});
 		}
@@ -316,7 +319,23 @@
 		snippet.classList.toggle("is-expanded", expanded);
 		snippet.classList.toggle("is-collapsed", !expanded);
 		const expand = snippet.querySelector("[data-mhtml-code-action='expand']");
-		if (expand) setButtonLabel(expand, expanded ? expandedText : collapsedText);
+		if (expand) {
+			updateExpandIcon(expand, expanded);
+			setButtonLabel(expand, expanded ? expandedText : collapsedText);
+		}
+	}
+
+	function updateExpandIcon(button, expanded) {
+		let icon = button.querySelector(".eds-icon");
+		if (!icon) {
+			icon = document.createElement("span");
+			icon.className = "eds-icon icon-pad-right";
+			button.insertBefore(icon, button.firstChild);
+		}
+
+		icon.classList.remove("icon-chevron-down", "icon-chevron-up", "icon-chevron-right");
+		icon.classList.add(expanded ? "icon-chevron-up" : "icon-chevron-down");
+		icon.classList.add("icon-pad-right");
 	}
 
 	function setButtonLabel(button, label) {
@@ -339,6 +358,41 @@
 			.map(node => node.textContent || "")
 			.join("")
 			.trim();
+	}
+
+	function applyFullSnippetSource(snippet, code) {
+		const source = readFullSnippetSource(snippet);
+		if (!source || code.dataset.mhtmlFullSourceApplied === "true") return;
+		const wasHighlighted = code.dataset.mhtmlHighlighted === "true";
+		code.dataset.mhtmlFullSourceApplied = "true";
+		code.dataset.mhtmlHighlighted = "false";
+		code.textContent = source;
+		if (wasHighlighted) highlightCode(code, readLanguage(code, snippet));
+	}
+
+	function readFullSnippetSource(snippet) {
+		const sources = [
+			"textarea.mhtml-full-snippet-source",
+			"textarea[data-mhtml-full-source='true']",
+			"textarea[data-blueprint-code]",
+			"textarea"
+		];
+
+		for (const selector of sources) {
+			const textarea = snippet.querySelector(selector);
+			if (!textarea) continue;
+			const value = normalizeSourceText(textarea.value || textarea.textContent || "");
+			if (value) return value;
+		}
+
+		return "";
+	}
+
+	function normalizeSourceText(text) {
+		return (text || "")
+			.replace(/\u00a0/g, " ")
+			.replace(/\r\n?/g, "\n")
+			.replace(/\s+$/, "");
 	}
 
 	function highlightCode(code, language) {
