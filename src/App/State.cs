@@ -16,6 +16,10 @@ internal sealed class AppState {
 	/// <summary>Whether the navigation sidebar is currently hidden.</summary>
 	[JsonPropertyName("collapsed")]
 	public bool Collapsed { get; set; }
+
+	/// <summary>Whether the main window was maximized when the user last changed/closed it.</summary>
+	[JsonPropertyName("maximized")]
+	public bool Maximized { get; set; }
 }
 
 /// <summary>

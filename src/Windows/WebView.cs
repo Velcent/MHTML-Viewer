@@ -61,6 +61,7 @@ internal sealed class WebView : IDisposable {
 	IntPtr backgroundBrush;
 	IntPtr largeIcon;
 	IntPtr smallIcon;
+	bool canPersistWindowState;
 
 	// Keep the delegate rooted for the lifetime of the window; Win32 calls this pointer directly.
 	Native.WndProcDelegate? wndProcDelegate;
@@ -119,6 +120,10 @@ internal sealed class WebView : IDisposable {
 		style |= Native.WS_THICKFRAME | Native.WS_MAXIMIZEBOX | Native.WS_MINIMIZEBOX;
 		Native.SetWindowLong(handle, Native.GWL_STYLE, style);
 		Native.SetWindowPos(handle, IntPtr.Zero, 0, 0, 0, 0, Native.SWP_NOSIZE | Native.SWP_NOMOVE | Native.SWP_FRAMECHANGED);
+		if (State.Current.Maximized) {
+			Native.ShowWindow(handle, Native.SW_MAXIMIZE);
+		}
+		canPersistWindowState = true;
 	}
 
 	/// <summary>
@@ -164,9 +169,11 @@ internal sealed class WebView : IDisposable {
 				}
 				return Native.DefWindowProc(hWnd, msg, wParam, lParam);
 			case Native.WM_SIZE:
+				PersistMaximizedState(wParam);
 				ResizeWebView();
 				return IntPtr.Zero;
 			case Native.WM_DESTROY:
+				PersistMaximizedState();
 				Native.PostQuitMessage(0);
 				return IntPtr.Zero;
 			case Native.WM_CUSTOM:
@@ -246,6 +253,7 @@ internal sealed class WebView : IDisposable {
 		titleController.ZoomFactor = 1.0;
 
 		titleWeb.WebMessageReceived += TitleWebMessageReceived;
+		titleWeb.NavigationCompleted += async (_, _) => await UpdateMaximizeState();
 		navWeb.WebMessageReceived += NavWebMessageReceived;
 		viewerWeb.NavigationStarting += ViewerNavigationStarting;
 		viewerWeb.FrameNavigationStarting += ViewerFrameNavigationStarting;
@@ -481,7 +489,28 @@ internal sealed class WebView : IDisposable {
 	}
 	async Task UpdateMaximizeState() {
 		bool isMax = Native.IsZoomed(handle);
+		PersistMaximizedState(isMax);
 		await titleWeb!.ExecuteScriptAsync($"setMaximized({isMax.ToString().ToLower()});");
+	}
+
+	/// <summary>
+	/// Saves window maximized state without treating temporary minimize events as restored windows.
+	/// </summary>
+	void PersistMaximizedState(IntPtr sizeMessageWParam) {
+		if (sizeMessageWParam.ToInt32() == Native.SIZE_MINIMIZED) return;
+		PersistMaximizedState();
+	}
+
+	void PersistMaximizedState() {
+		if (!canPersistWindowState || handle == IntPtr.Zero) return;
+		if (Native.IsIconic(handle)) return;
+		PersistMaximizedState(Native.IsZoomed(handle));
+	}
+
+	void PersistMaximizedState(bool isMaximized) {
+		if (!canPersistWindowState || State.Current.Maximized == isMaximized) return;
+		State.Current.Maximized = isMaximized;
+		State.Save(State.Current);
 	}
 	async void ViewerWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e) {
 		// Document scripts only send title updates; navigation commands are handled by the title/sidebar views.

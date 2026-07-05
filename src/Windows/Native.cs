@@ -13,6 +13,7 @@ internal static partial class Native {
 	public const int WM_DESTROY = 0x0002;
 	public const int WM_NCHITTEST = 0x0084;
 	public const int WM_NCLBUTTONDOWN = 0x00A1;
+	public const int SIZE_MINIMIZED = 1;
 
 	// Hit-test return values used to keep resize behavior with a borderless title bar.
 	public const int HTCLIENT = 1;
@@ -87,6 +88,9 @@ internal static partial class Native {
 
 	[DllImport("user32.dll")]
 	public static extern bool IsZoomed(IntPtr hWnd);
+
+	[DllImport("user32.dll")]
+	public static extern bool IsIconic(IntPtr hWnd);
 
 	[DllImport("user32.dll")]
 	public static extern bool ReleaseCapture();
