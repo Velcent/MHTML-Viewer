@@ -963,7 +963,7 @@ internal sealed class WebView : IDisposable {
 				items.Add(new Node {
 					name = DecodeTreeName(GetSwitchVariantBaseName(Path.GetFileNameWithoutExtension(file))),
 					path = file,
-					keepNumbering = IsApiReferencePath(file)
+					keepNumbering = IsInsideApiReferencePath(file)
 				});
 			});
 		}
@@ -994,7 +994,7 @@ internal sealed class WebView : IDisposable {
 			items.Add(new Node {
 				name = DecodeTreeName(Path.GetFileName(dir)),
 				path = target,
-				keepNumbering = IsApiReferencePath(dir),
+				keepNumbering = IsInsideApiReferencePath(dir),
 				children = children
 			});
 		});
@@ -1007,6 +1007,11 @@ internal sealed class WebView : IDisposable {
 			|| IsPathInsideNamedFolder(path, "Unreal Engine C++ API Reference")
 			|| IsPathInsideNamedFolder(path, "Unreal Engine Python API Documentation");
 	}
+	bool IsInsideApiReferencePath(string path) {
+		return IsInsideNamedFolder(path, "Unreal Engine Blueprint API Reference")
+			|| IsInsideNamedFolder(path, "Unreal Engine C++ API Reference")
+			|| IsInsideNamedFolder(path, "Unreal Engine Python API Documentation");
+	}
 	bool IsPathInsideNamedFolder(string path, string folderName) {
 		string fullPath = Path.GetFullPath(path);
 		string[] parts = fullPath.Split(
@@ -1015,6 +1020,20 @@ internal sealed class WebView : IDisposable {
 		);
 		return parts.Any(part =>
 			NormalizeNumberedFolderName(part).Equals(folderName, StringComparison.OrdinalIgnoreCase));
+	}
+	bool IsInsideNamedFolder(string path, string folderName) {
+		string fullPath = Path.GetFullPath(path);
+		string[] parts = fullPath.Split(
+			new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+			StringSplitOptions.RemoveEmptyEntries
+		);
+
+		for (int i = 0; i < parts.Length - 1; i++) {
+			if (NormalizeNumberedFolderName(parts[i]).Equals(folderName, StringComparison.OrdinalIgnoreCase)) {
+				return true;
+			}
+		}
+		return false;
 	}
 	static string NormalizeNumberedFolderName(string name) {
 		return Regex.Replace(name, @"^\d+\.\s*", "");
