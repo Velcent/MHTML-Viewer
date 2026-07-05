@@ -1003,37 +1003,27 @@ internal sealed class WebView : IDisposable {
 		return SortTreeItems(currentDir, items);
 	}
 	bool IsApiReferencePath(string path) {
-		return IsPathInsideNamedFolder(path, "Unreal Engine Blueprint API Reference")
-			|| IsPathInsideNamedFolder(path, "Unreal Engine C++ API Reference")
-			|| IsPathInsideNamedFolder(path, "Unreal Engine Python API Documentation");
+		return GetApiReferenceDepth(path) >= 0;
 	}
 	bool IsInsideApiReferencePath(string path) {
-		return IsInsideNamedFolder(path, "Unreal Engine Blueprint API Reference")
-			|| IsInsideNamedFolder(path, "Unreal Engine C++ API Reference")
-			|| IsInsideNamedFolder(path, "Unreal Engine Python API Documentation");
+		return GetApiReferenceDepth(path) > 0;
 	}
-	bool IsPathInsideNamedFolder(string path, string folderName) {
-		string fullPath = Path.GetFullPath(path);
-		string[] parts = fullPath.Split(
-			new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
-			StringSplitOptions.RemoveEmptyEntries
-		);
-		return parts.Any(part =>
-			NormalizeNumberedFolderName(part).Equals(folderName, StringComparison.OrdinalIgnoreCase));
-	}
-	bool IsInsideNamedFolder(string path, string folderName) {
+	int GetApiReferenceDepth(string path) {
 		string fullPath = Path.GetFullPath(path);
 		string[] parts = fullPath.Split(
 			new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
 			StringSplitOptions.RemoveEmptyEntries
 		);
 
-		for (int i = 0; i < parts.Length - 1; i++) {
-			if (NormalizeNumberedFolderName(parts[i]).Equals(folderName, StringComparison.OrdinalIgnoreCase)) {
-				return true;
+		for (int i = 0; i < parts.Length; i++) {
+			string name = NormalizeNumberedFolderName(parts[i]);
+			if (name is "Unreal Engine Blueprint API Reference"
+				or "Unreal Engine C++ API Reference"
+				or "Unreal Engine Python API Documentation") {
+				return parts.Length - i - 1;
 			}
 		}
-		return false;
+		return -1;
 	}
 	static string NormalizeNumberedFolderName(string name) {
 		return Regex.Replace(name, @"^\d+\.\s*", "");
