@@ -1,0 +1,248 @@
+using System.Text;
+using System.Text.RegularExpressions;
+
+internal static class MhtmlDocumentLoader {
+	/// <summary>
+	/// Parses an MHTML file and builds a WebView-friendly resource table for its HTML and embedded assets.
+	/// </summary>
+	public static LoadedDocument Load(
+		string file,
+		IReadOnlyDictionary<string, OfflineAsset> offlineAssets,
+		string documentResourceHost
+	) {
+		string content = File.ReadAllText(file);
+		string? boundary = TryExtractBoundary(content);
+		if (string.IsNullOrWhiteSpace(boundary)) {
+			throw new InvalidOperationException("Invalid MHTML: multipart boundary not found.");
+		}
+
+		string marker = "--" + boundary;
+		string[] segments = content.Split(marker, StringSplitOptions.None);
+		if (segments.Length < 2) {
+			throw new InvalidOperationException("Invalid MHTML: no multipart sections found.");
+		}
+
+		var resourcesByUrl = new Dictionary<string, ResourceEntry>(StringComparer.Ordinal);
+		var resourcesByCid = new Dictionary<string, ResourceEntry>(StringComparer.OrdinalIgnoreCase);
+		string? rootHtml = null;
+
+		for (int i = 1; i < segments.Length; i++) {
+			string segment = segments[i];
+			if (segment.StartsWith("--", StringComparison.Ordinal)) break;
+
+			segment = segment.TrimStart('\r', '\n');
+			if (string.IsNullOrWhiteSpace(segment)) continue;
+
+			MhtmlPart part = ParsePart(segment);
+			if (rootHtml == null && part.ContentType.StartsWith("text/html", StringComparison.OrdinalIgnoreCase)) {
+				rootHtml = RewriteCidUrls(
+					DecodePartText(part.Body, part.TransferEncoding, part.ContentType),
+					documentResourceHost
+				);
+			}
+
+			ResourceEntry? resource = CreateResourceEntry(part, offlineAssets);
+			if (resource == null) continue;
+
+			if (!string.IsNullOrWhiteSpace(part.ContentLocation)) {
+				string location = part.ContentLocation.Trim();
+				if (!location.StartsWith("cid:", StringComparison.OrdinalIgnoreCase) && !resourcesByUrl.ContainsKey(location)) {
+					resourcesByUrl[location] = resource;
+				}
+
+				string cidFromLocation = NormalizeCidToken(location);
+				if (!string.IsNullOrEmpty(cidFromLocation) && !resourcesByCid.ContainsKey(cidFromLocation)) {
+					resourcesByCid[cidFromLocation] = resource;
+				}
+			}
+
+			if (!string.IsNullOrWhiteSpace(part.ContentId)) {
+				string cid = NormalizeCidToken(part.ContentId);
+				if (!string.IsNullOrEmpty(cid) && !resourcesByCid.ContainsKey(cid)) {
+					resourcesByCid[cid] = resource;
+				}
+			}
+		}
+
+		if (string.IsNullOrWhiteSpace(rootHtml)) {
+			throw new InvalidOperationException("Invalid MHTML: root HTML part not found.");
+		}
+
+		return new LoadedDocument(rootHtml, Encoding.UTF8.GetBytes(rootHtml), resourcesByUrl, resourcesByCid);
+	}
+
+	static string RewriteCidUrls(string html, string documentResourceHost) {
+		return Regex.Replace(
+			html,
+			@"cid:([^\s""'<>())]+)",
+			match => BuildLocalCidUrl(match.Groups[1].Value, documentResourceHost),
+			RegexOptions.IgnoreCase
+		);
+	}
+
+	static string BuildLocalCidUrl(string cid, string documentResourceHost) {
+		return $"https://{documentResourceHost}/cid/{Uri.EscapeDataString(NormalizeCidToken(cid))}";
+	}
+
+	static string NormalizeCidToken(string cid) {
+		if (string.IsNullOrWhiteSpace(cid)) return string.Empty;
+		cid = cid.Trim();
+		if (cid.StartsWith("cid:", StringComparison.OrdinalIgnoreCase)) cid = cid[4..];
+		if (cid.StartsWith("<", StringComparison.Ordinal) && cid.EndsWith(">", StringComparison.Ordinal) && cid.Length > 2) {
+			cid = cid[1..^1];
+		}
+		return cid;
+	}
+
+	static string? TryExtractBoundary(string content) {
+		Match match = Regex.Match(content, "boundary=\"([^\"]+)\"", RegexOptions.IgnoreCase);
+		return match.Success ? match.Groups[1].Value : null;
+	}
+
+	static MhtmlPart ParsePart(string segment) {
+		int separatorLength = 4;
+		int separator = segment.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+		if (separator < 0) {
+			separator = segment.IndexOf("\n\n", StringComparison.Ordinal);
+			separatorLength = 2;
+		}
+
+		string headerText;
+		string body;
+		if (separator < 0) {
+			headerText = segment.Trim();
+			body = string.Empty;
+		} else {
+			headerText = segment[..separator].TrimEnd();
+			body = segment[(separator + separatorLength)..];
+		}
+
+		Dictionary<string, string> headers = ParseHeaders(headerText);
+		headers.TryGetValue("Content-Type", out string? contentType);
+		headers.TryGetValue("Content-Transfer-Encoding", out string? transferEncoding);
+		headers.TryGetValue("Content-Location", out string? contentLocation);
+		headers.TryGetValue("Content-ID", out string? contentId);
+
+		return new MhtmlPart(
+			contentType ?? "application/octet-stream",
+			transferEncoding ?? "8bit",
+			contentLocation ?? string.Empty,
+			contentId ?? string.Empty,
+			body
+		);
+	}
+
+	static Dictionary<string, string> ParseHeaders(string headerText) {
+		var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		string currentName = string.Empty;
+
+		foreach (string rawLine in headerText.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n')) {
+			if (string.IsNullOrWhiteSpace(rawLine)) continue;
+
+			if ((rawLine[0] == ' ' || rawLine[0] == '\t') && currentName.Length > 0) {
+				headers[currentName] += " " + rawLine.Trim();
+				continue;
+			}
+
+			int colonIndex = rawLine.IndexOf(':');
+			if (colonIndex <= 0) continue;
+
+			currentName = rawLine[..colonIndex].Trim();
+			headers[currentName] = rawLine[(colonIndex + 1)..].Trim();
+		}
+
+		return headers;
+	}
+
+	static ResourceEntry? CreateResourceEntry(MhtmlPart part, IReadOnlyDictionary<string, OfflineAsset> offlineAssets) {
+		if (HasBody(part.Body)) {
+			return new ResourceEntry(part.ContentType, DecodePartBytes(part.Body, part.TransferEncoding, part.ContentType), null);
+		}
+
+		if (!string.IsNullOrWhiteSpace(part.ContentLocation) &&
+			offlineAssets.TryGetValue(part.ContentLocation.Trim(), out OfflineAsset? asset)) {
+			return new ResourceEntry(asset.ContentType, null, asset.FilePath);
+		}
+
+		return null;
+	}
+
+	static bool HasBody(string body) {
+		return !string.IsNullOrWhiteSpace(body);
+	}
+
+	static byte[] DecodePartBytes(string body, string transferEncoding, string contentType) {
+		string normalizedEncoding = transferEncoding.Trim().ToLowerInvariant();
+		return normalizedEncoding switch {
+			"base64" => DecodeBase64Bytes(body),
+			"quoted-printable" => DecodeQuotedPrintableToBytes(body),
+			_ => Encoding.UTF8.GetBytes(body)
+		};
+	}
+
+	static string DecodePartText(string body, string transferEncoding, string contentType) {
+		return Encoding.UTF8.GetString(DecodePartBytes(body, transferEncoding, contentType));
+	}
+
+	static byte[] DecodeQuotedPrintableToBytes(string input) {
+		using var buffer = new MemoryStream(input.Length);
+
+		for (int i = 0; i < input.Length; i++) {
+			char ch = input[i];
+			if (ch != '=') {
+				buffer.WriteByte((byte)ch);
+				continue;
+			}
+
+			if (i + 1 < input.Length && input[i + 1] == '\r') {
+				i++;
+				if (i + 1 < input.Length && input[i + 1] == '\n') i++;
+				continue;
+			}
+			if (i + 1 < input.Length && input[i + 1] == '\n') {
+				i++;
+				continue;
+			}
+			if (i + 2 < input.Length &&
+				IsHex(input[i + 1]) &&
+				IsHex(input[i + 2])) {
+				byte value = (byte)((HexToInt(input[i + 1]) << 4) | HexToInt(input[i + 2]));
+				buffer.WriteByte(value);
+				i += 2;
+				continue;
+			}
+
+			buffer.WriteByte((byte)'=');
+		}
+
+		return buffer.ToArray();
+	}
+
+	static bool IsHex(char c) {
+		return (c >= '0' && c <= '9')
+			|| (c >= 'a' && c <= 'f')
+			|| (c >= 'A' && c <= 'F');
+	}
+
+	static int HexToInt(char c) {
+		return c switch {
+			>= '0' and <= '9' => c - '0',
+			>= 'a' and <= 'f' => c - 'a' + 10,
+			>= 'A' and <= 'F' => c - 'A' + 10,
+			_ => 0
+		};
+	}
+
+	static byte[] DecodeBase64Bytes(string input) {
+		string normalized = new(input.Where(c => !char.IsWhiteSpace(c)).ToArray());
+		return Convert.FromBase64String(normalized);
+	}
+
+	sealed record MhtmlPart(
+		string ContentType,
+		string TransferEncoding,
+		string ContentLocation,
+		string ContentId,
+		string Body
+	);
+}

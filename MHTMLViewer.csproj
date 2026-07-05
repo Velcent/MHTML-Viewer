@@ -29,30 +29,27 @@
 	<PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-windows'">
 		<OutputType>WinExe</OutputType>
 		<BuiltInComInteropSupport>true</BuiltInComInteropSupport>
-		<ApplicationIcon>app.ico</ApplicationIcon>
+		<ApplicationIcon>src\Resources\app.ico</ApplicationIcon>
 	</PropertyGroup>
 
 	<ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows'">
 		<PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3912.50" />
-		<EmbeddedResource Include="app.ico" />
-		<EmbeddedResource Include="TitleBar.html" />
-		<EmbeddedResource Include="SideBar.html" />
-		<EmbeddedResource Include="GetTitle.js" />
-		<EmbeddedResource Include="EpicSwitch.js" />
-		<EmbeddedResource Include="EpicCode.js" />
-		<EmbeddedResource Include="EpicBlueprint.js" />
-		<EmbeddedResource Include="EpicComparisonSlider.js" />
-		<EmbeddedResource Include="EpicSliderSequence.js" />
-		<EmbeddedResource Include="ToggleSideBar.js" />
+		<EmbeddedResource Include="src\Resources\app.ico" />
+		<EmbeddedResource Include="src\Web\TitleBar.html" />
+		<EmbeddedResource Include="src\Web\SideBar.html" />
+		<EmbeddedResource Include="src\Web\Scripts\GetTitle.js" />
+		<EmbeddedResource Include="src\Web\Scripts\EpicSwitch.js" />
+		<EmbeddedResource Include="src\Web\Scripts\EpicCode.js" />
+		<EmbeddedResource Include="src\Web\Scripts\EpicBlueprint.js" />
+		<EmbeddedResource Include="src\Web\Scripts\EpicComparisonSlider.js" />
+		<EmbeddedResource Include="src\Web\Scripts\EpicSliderSequence.js" />
+		<EmbeddedResource Include="src\Web\Scripts\ToggleSideBar.js" />
 		<TrimmerRootAssembly Include="Microsoft.Web.WebView2.Core" />
 	</ItemGroup>
 
 	<ItemGroup Condition="'$(TargetFramework)' != 'net10.0-windows'">
-		<Compile Remove="WebView.cs" />
-		<Compile Remove="Native.cs" />
-		<Compile Remove="AppJsonContext.cs" />
-		<Compile Remove="Node.cs" />
-		<Compile Remove="State.cs" />
+		<Compile Remove="src\Windows\WebView.cs" />
+		<Compile Remove="src\Windows\Native.cs" />
 	</ItemGroup>
 
 	<Target Name="RemoveUnusedWebView2WpfReference" BeforeTargets="ResolveAssemblyReferences" Condition="'$(TargetFramework)' == 'net10.0-windows'">

@@ -10,8 +10,8 @@ internal static class Program {
 		_ = app.InitializeAsync().ContinueWith(t => {
 			if (t.Exception != null) {
 				string error = t.Exception.GetBaseException().ToString();
-				string tempPath = Path.Combine(Path.GetTempPath(), "MHTMLViewer");
-				File.WriteAllText(Path.Combine(tempPath, "startup-error.txt"), error);
+				Directory.CreateDirectory(AppPaths.TempDirectory);
+				File.WriteAllText(Path.Combine(AppPaths.TempDirectory, "startup-error.txt"), error);
 				Native.ShowMessage(app.Handle, error, "Startup Error");
 			}
 		}, TaskScheduler.FromCurrentSynchronizationContext());
@@ -34,7 +34,7 @@ internal sealed class SyncContext : SynchronizationContext {
 
 	public override void Post(SendOrPostCallback d, object? state) {
 		Queue.Enqueue((d, state));
-		Native.PostMessage(hwnd, 0x8001, UIntPtr.Zero, IntPtr.Zero);
+		Native.PostMessage(hwnd, Native.WM_CUSTOM, UIntPtr.Zero, IntPtr.Zero);
 	}
 
 	public static void DispatchQueuedCallbacks() {

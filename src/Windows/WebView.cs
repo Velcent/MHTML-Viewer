@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Drawing;
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Web.WebView2.Core;
@@ -30,9 +29,6 @@ internal sealed class WebView : IDisposable {
 	const string ToggleSidebarRes = "ToggleSideBar.js";
 	const string DocumentResourceHost = "mhtml.local";
 	const string LocalMediaHost = "media.local";
-	const string ViewerCacheFileName = "viewer-cache.bin";
-	const string ViewerCacheMagic = "MHTMLViewerCache";
-	const int ViewerCacheVersion = 8;
 	bool isTitleUpdated = false;
 	bool isTitleInit = false;
 	bool isLoading = false;
@@ -54,28 +50,32 @@ internal sealed class WebView : IDisposable {
 	string pendingLocalHtmlNavigationPath = string.Empty;
 	int documentNavigationVersion = 0;
 	List<Node> viewerTree = new();
+	string firstFilePath = string.Empty;
 	readonly Dictionary<string, string> titleCache = new(StringComparer.OrdinalIgnoreCase);
 	readonly List<NavigationEntry> navigationHistory = new();
 	int navigationIndex = -1;
 	IntPtr handle;
+	IntPtr backgroundBrush;
+	IntPtr largeIcon;
+	IntPtr smallIcon;
 
-	// IMPORTANT: prevent GC
+	// Keep the delegate rooted for the lifetime of the window; Win32 calls this pointer directly.
 	Native.WndProcDelegate? wndProcDelegate;
 
 	public IntPtr Handle => handle;
 
 	public void Create() {
 		wndProcDelegate = WndProc;
-		Native.ExtractIconEx(Environment.ProcessPath!, 0, out var large, out var small, 1);
-        var wc = new Native.WNDCLASS {
-            lpfnWndProc = Marshal.GetFunctionPointerForDelegate(wndProcDelegate),
-            lpszClassName = "MHTMLViewerWindow",
-            hInstance = Native.GetModuleHandle(null),
-			hIcon = large,
-			// hIconSm = small != IntPtr.Zero ? small : large,
-			hbrBackground = Native.CreateSolidBrush(0x101010)
-        };
-        Native.RegisterClass(ref wc);
+		Native.ExtractIconEx(Environment.ProcessPath!, 0, out largeIcon, out smallIcon, 1);
+		backgroundBrush = Native.CreateSolidBrush(0x101010);
+		var wc = new Native.WNDCLASS {
+			lpfnWndProc = Marshal.GetFunctionPointerForDelegate(wndProcDelegate),
+			lpszClassName = "MHTMLViewerWindow",
+			hInstance = Native.GetModuleHandle(null),
+			hIcon = largeIcon,
+			hbrBackground = backgroundBrush
+		};
+		Native.RegisterClass(ref wc);
 		int screenWidth = Native.GetSystemMetrics(Native.SM_CXSCREEN);
 		int screenHeight = Native.GetSystemMetrics(Native.SM_CYSCREEN);
 		if (InitialWidth < screenWidth) {
@@ -99,8 +99,8 @@ internal sealed class WebView : IDisposable {
 				AppTitle,
 				Native.WS_POPUP | Native.WS_VISIBLE,
 				0, 0,
-				Native.GetSystemMetrics(0), // SM_CXSCREEN
-				Native.GetSystemMetrics(1), // SM_CYSCREEN
+				Native.GetSystemMetrics(Native.SM_CXSCREEN),
+				Native.GetSystemMetrics(Native.SM_CYSCREEN),
 				IntPtr.Zero,
 				IntPtr.Zero,
 				wc.hInstance,
@@ -108,17 +108,15 @@ internal sealed class WebView : IDisposable {
 			);
 		}
 		int style = Native.GetWindowLong(handle, Native.GWL_STYLE);
-		style &= ~Native.WS_CAPTION;      // hapus titlebar
-		style |= Native.WS_THICKFRAME;    // pastikan resize aktif
-		style |= Native.WS_MAXIMIZEBOX;   // optional tapi bagus
-		style |= Native.WS_MINIMIZEBOX;   // optional
+		style &= ~Native.WS_CAPTION;
+		style |= Native.WS_THICKFRAME | Native.WS_MAXIMIZEBOX | Native.WS_MINIMIZEBOX;
 		Native.SetWindowLong(handle, Native.GWL_STYLE, style);
 		Native.SetWindowPos(handle, IntPtr.Zero, 0, 0, 0, 0, Native.SWP_NOSIZE | Native.SWP_NOMOVE | Native.SWP_FRAMECHANGED);
 	}
 	IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam) {
 		switch (msg) {
 			case Native.WM_ACTIVATE:
-				Native.InvalidateRect(hWnd, IntPtr.Zero, true); // paksa repaint seluruh window
+				Native.InvalidateRect(hWnd, IntPtr.Zero, true);
 				return IntPtr.Zero;
 			case Native.WM_NCHITTEST:
 				const int resizeBorder = ResizeBorder + 2;
@@ -128,24 +126,21 @@ internal sealed class WebView : IDisposable {
 				int x = (short)(lParam.ToInt32() & 0xFFFF);
 				int y = (short)((lParam.ToInt32() >> 16) & 0xFFFF);
 
-				bool onLeft   = x >= r.Left && x < r.Left + resizeBorder;
-				bool onRight  = x <= r.Right && x > r.Right - resizeBorder;
-				bool onTop    = y >= r.Top && y < r.Top + resizeBorder;
+				bool onLeft = x >= r.Left && x < r.Left + resizeBorder;
+				bool onRight = x <= r.Right && x > r.Right - resizeBorder;
+				bool onTop = y >= r.Top && y < r.Top + resizeBorder;
 				bool onBottom = y <= r.Bottom && y > r.Bottom - resizeBorder;
 
-				// Corner dulu
 				if (onTop && onLeft) return Native.HTTOPLEFT;
 				if (onTop && onRight) return Native.HTTOPRIGHT;
 				if (onBottom && onLeft) return Native.HTBOTTOMLEFT;
 				if (onBottom && onRight) return Native.HTBOTTOMRIGHT;
 
-				// Edge
 				if (onLeft) return Native.HTLEFT;
 				if (onRight) return Native.HTRIGHT;
 				if (onTop) return Native.HTTOP;
 				if (onBottom) return Native.HTBOTTOM;
 
-				// Client
 				return Native.HTCLIENT;
 			case Native.WM_NCCALCSIZE:
 				if (wParam != IntPtr.Zero) {
@@ -174,14 +169,14 @@ internal sealed class WebView : IDisposable {
 		int width = Math.Max(0, rect.Right - rect.Left);
 		int height = Math.Max(0, rect.Bottom - rect.Top);
 		int contentHeight = height - TitleBarHeight;
-		int sidebarW = State.Current.collapsed ? 0 : State.Current.sidebarWidth;
+		int sidebarW = State.Current.Collapsed ? 0 : State.Current.SidebarWidth;
 		bool isMax = Native.IsZoomed(handle);
 		int border = isMax ? ResizeBorder + 5 : ResizeBorder;
 		// TitleBar
 		titleController.Bounds = new Rectangle(
 			border,
 			isMax ? border : 0,
-			width - (border*2),
+			width - (border * 2),
 			TitleBarHeight
 		);
 		// Sidebar
@@ -194,19 +189,19 @@ internal sealed class WebView : IDisposable {
 		viewerController.Bounds = new Rectangle(
 			sidebarW + border,
 			isMax ? TitleBarHeight + border : TitleBarHeight,
-			width - sidebarW - (border*2), contentHeight - border
+			width - sidebarW - (border * 2), contentHeight - border
 		);
 	}
 	public async Task InitializeAsync() {
 		workspaceRoot = Directory.GetCurrentDirectory();
 		baseRoot = Path.Combine(workspaceRoot, "mhtml");
 
-		string tempPath = Path.Combine(Path.GetTempPath(), "MHTMLViewer");
+		string tempPath = AppPaths.TempDirectory;
 		var options = new CoreWebView2EnvironmentOptions(
 			"--allow-file-access-from-files --disable-web-security"
 		);
 		var env = await CoreWebView2Environment.CreateAsync(null, tempPath, options);
-		
+
 		navController = await env.CreateCoreWebView2ControllerAsync(handle);
 		viewerController = await env.CreateCoreWebView2ControllerAsync(handle);
 		titleController = await env.CreateCoreWebView2ControllerAsync(handle);
@@ -238,31 +233,33 @@ internal sealed class WebView : IDisposable {
 		viewerWeb.WebMessageReceived += ViewerWebMessageReceived;
 		viewerWeb.WebResourceRequested += ViewerWebResourceRequested;
 
-		titleWeb.NavigateToString(LoadEmbedded(TitleBarRes));
-		await SetIcon($"data:{GetMime(IconRes)};base64,{Convert.ToBase64String(LoadEmbeddedBytes(IconRes))}");
+		titleWeb.NavigateToString(EmbeddedResourceLoader.LoadText(TitleBarRes));
+		await SetIcon($"data:{GetMime(IconRes)};base64,{Convert.ToBase64String(EmbeddedResourceLoader.LoadBytes(IconRes))}");
 		_ = GetTitleLoop();
 
 		await ShowTitleLoading(30, "Loading Assets...");
-		offlineAssets = LoadOfflineAssetIndex(
+		offlineAssets = OfflineAssetIndex.Load(
 			Path.Combine(workspaceRoot, "assets", "mhtml-uuid.tsv"),
 			workspaceRoot
 		);
 
 		await ShowTitleLoading(60, "Loading Cache...");
-		string cachePath = Path.Combine(workspaceRoot, "assets", ViewerCacheFileName);
-		if (!TryLoadViewerCache(cachePath, out ViewerCacheData viewerCache)) {
+		string cachePath = Path.Combine(workspaceRoot, "assets", ViewerCacheStore.FileName);
+		if (!ViewerCacheStore.TryLoad(cachePath, out ViewerCacheData viewerCache)) {
 			await ShowTitleLoading(50, "Building Link Index...");
-			BuildLinkIndex();
+			foreach (var kv in ContentLocationIndexBuilder.Build(baseRoot)) {
+				contentLocationMap.TryAdd(kv.Key, kv.Value);
+			}
 
 			await ShowTitleLoading(80, "Building File Tree...");
-			List<Node> builtTree = BuildTree(baseRoot);
-			string builtFirst = FindFirstTreePath(builtTree);
+			List<Node> builtTree = DocumentTreeBuilder.Build(baseRoot);
+			string builtFirst = DocumentTreeBuilder.FindFirstTreePath(builtTree);
 			viewerCache = new ViewerCacheData(
 				builtFirst,
 				builtTree,
 				contentLocationMap.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase)
 			);
-			SaveViewerCache(cachePath, viewerCache);
+			ViewerCacheStore.Save(cachePath, viewerCache);
 		}
 
 		ApplyViewerCache(viewerCache);
@@ -278,7 +275,7 @@ internal sealed class WebView : IDisposable {
 		titleCache.Clear();
 		string treeJson = JsonSerializer.Serialize(tree, AppJsonContext.Default.ListNode);
 		string firstJson = JsonSerializer.Serialize(first, AppJsonContext.Default.String);
-		string stateJson = JsonSerializer.Serialize(State.Current, AppJsonContext.Default.STATE);
+		string stateJson = JsonSerializer.Serialize(State.Current, AppJsonContext.Default.AppState);
 
 		navWeb.NavigationCompleted += async (_, _) => {
 			await navWeb.ExecuteScriptAsync($@"
@@ -286,7 +283,7 @@ internal sealed class WebView : IDisposable {
 			");
 			await ShowTitleLoading(90, "Almost Ready...");
 		};
-		navWeb.NavigateToString(LoadEmbedded(SidebarRes));
+		navWeb.NavigateToString(EmbeddedResourceLoader.LoadText(SidebarRes));
 	}
 	string GetMime(string fileName) {
 		string ext = Path.GetExtension(fileName).ToLowerInvariant();
@@ -339,12 +336,15 @@ internal sealed class WebView : IDisposable {
 		string title;
 		if (!string.IsNullOrWhiteSpace(file) && FindTitleNodeChain(viewerTree, file, out var chain)) {
 			title = string.Join(" \u2b9e ", chain
-				.Where(node => !string.IsNullOrWhiteSpace(node.name))
-				.Select(node => BuildTitleLink(CleanTreeTitle(node.name), node.path, file)));
+				.Where(node => !string.IsNullOrWhiteSpace(node.Name))
+				.Select(node => BuildTitleLink(CleanTreeTitle(node.Name), node.Path, file)));
 		} else {
+			string firstKnownFile = !string.IsNullOrWhiteSpace(firstFilePath)
+				? firstFilePath
+				: DocumentTreeBuilder.FindFirstFile(baseRoot);
 			string fallback = !string.IsNullOrWhiteSpace(file)
 				? Path.GetFileNameWithoutExtension(file)
-				: Path.GetFileNameWithoutExtension(FindFirstFile(baseRoot));
+				: Path.GetFileNameWithoutExtension(firstKnownFile);
 			title = WebUtility.HtmlEncode(CleanTreeTitle(fallback));
 		}
 
@@ -375,14 +375,14 @@ internal sealed class WebView : IDisposable {
 	}
 	static void FindNodeChain(Node node, string file, List<Node> current, ref List<Node>? best) {
 		current.Add(node);
-		if (!string.IsNullOrWhiteSpace(node.path) &&
-			node.path.Equals(file, StringComparison.OrdinalIgnoreCase) &&
+		if (!string.IsNullOrWhiteSpace(node.Path) &&
+			node.Path.Equals(file, StringComparison.OrdinalIgnoreCase) &&
 			(best == null || current.Count > best.Count)) {
 			best = current.ToList();
 		}
 
-		if (node.children != null) {
-			foreach (var child in node.children) {
+		if (node.Children != null) {
+			foreach (var child in node.Children) {
 				FindNodeChain(child, file, current, ref best);
 			}
 		}
@@ -400,38 +400,38 @@ internal sealed class WebView : IDisposable {
 		await titleWeb!.ExecuteScriptAsync($"hideLoading()");
 	}
 	async Task InjectGetTitle() {
-		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(GetTitleRes));
+		await viewerWeb!.ExecuteScriptAsync(EmbeddedResourceLoader.LoadText(GetTitleRes));
 	}
 	async Task InjectToggleButton() {
-		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(ToggleSidebarRes));
+		await viewerWeb!.ExecuteScriptAsync(EmbeddedResourceLoader.LoadText(ToggleSidebarRes));
 		await UpdateToggleSidebar();
 	}
 	async Task InjectEpicSwitch() {
-		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(EpicSwitchRes));
+		await viewerWeb!.ExecuteScriptAsync(EmbeddedResourceLoader.LoadText(EpicSwitchRes));
 	}
 	async Task InjectEpicCode() {
-		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(EpicCodeRes));
+		await viewerWeb!.ExecuteScriptAsync(EmbeddedResourceLoader.LoadText(EpicCodeRes));
 	}
 	async Task InjectEpicBlueprint() {
-		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(EpicBlueprintRes));
+		await viewerWeb!.ExecuteScriptAsync(EmbeddedResourceLoader.LoadText(EpicBlueprintRes));
 	}
 	async Task InjectEpicComparisonSlider() {
-		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(EpicComparisonSliderRes));
+		await viewerWeb!.ExecuteScriptAsync(EmbeddedResourceLoader.LoadText(EpicComparisonSliderRes));
 	}
 	async Task InjectEpicSliderSequence() {
-		await viewerWeb!.ExecuteScriptAsync(LoadEmbedded(EpicSliderSequenceRes));
+		await viewerWeb!.ExecuteScriptAsync(EmbeddedResourceLoader.LoadText(EpicSliderSequenceRes));
 	}
 	async Task ToggleSidebar() {
-		State.Current.collapsed = !State.Current.collapsed;
+		State.Current.Collapsed = !State.Current.Collapsed;
 		State.Save(State.Current);
 		ResizeWebView();
 		await UpdateToggleSidebar();
 	}
 	async Task UpdateToggleSidebar() {
 		await viewerWeb!.ExecuteScriptAsync($@"
-			document.querySelector('.sidebarHandle a').innerHTML = '" + (State.Current.collapsed ? '⮞' : '⮜') + @"';
+			document.querySelector('.sidebarHandle a').innerHTML = '" + (State.Current.Collapsed ? '⮞' : '⮜') + @"';
 		");
-		await navWeb!.ExecuteScriptAsync($"setCollapsed({State.Current.collapsed.ToString().ToLower()})");
+		await navWeb!.ExecuteScriptAsync($"setCollapsed({State.Current.Collapsed.ToString().ToLower()})");
 	}
 	async Task UpdateMaximizeState() {
 		bool isMax = Native.IsZoomed(handle);
@@ -488,7 +488,7 @@ internal sealed class WebView : IDisposable {
 			string type = msg.RootElement.GetProperty("type").GetString() ?? "";
 			switch (type) {
 				case "setLastFile":
-					State.Current.lastFile = msg.RootElement.GetProperty("path").GetString() ?? "";
+					State.Current.LastFile = msg.RootElement.GetProperty("path").GetString() ?? "";
 					break;
 				case "open":
 					string fullPath = msg.RootElement.GetProperty("path").GetString() ?? "";
@@ -505,8 +505,8 @@ internal sealed class WebView : IDisposable {
 					break;
 				case "resizeSidebar":
 					int requestedWidth = msg.RootElement.GetProperty("width").GetInt32();
-					State.Current.sidebarWidth = Math.Clamp(requestedWidth, MinSidebarWidth, MaxSidebarWidth);
-					State.Current.collapsed = false;
+					State.Current.SidebarWidth = Math.Clamp(requestedWidth, MinSidebarWidth, MaxSidebarWidth);
+					State.Current.Collapsed = false;
 					State.Save(State.Current);
 					ResizeWebView();
 					break;
@@ -724,7 +724,7 @@ internal sealed class WebView : IDisposable {
 		currentFilePath = file;
 		pendingFragment = fragment;
 		currentDocument = null;
-		State.Current.lastFile = file;
+		State.Current.LastFile = file;
 		State.Save(State.Current);
 		if (addHistory) AddHistory(NavigationEntry.Document(file, fragment));
 		if (navigate) {
@@ -737,7 +737,7 @@ internal sealed class WebView : IDisposable {
 		currentFilePath = file;
 		pendingFragment = fragment;
 		currentDocument = documentCache.GetOrAdd(file, LoadDocument);
-		State.Current.lastFile = file;
+		State.Current.LastFile = file;
 		State.Save(State.Current);
 		if (addHistory) AddHistory(NavigationEntry.Document(file, fragment));
 		viewerWeb!.Navigate(BuildDocumentRootUrl());
@@ -788,119 +788,7 @@ internal sealed class WebView : IDisposable {
 			contentLocationMap[kv.Key] = kv.Value;
 		}
 
-		FirstFile = cache.FirstFile;
-		isFirstFileInit = true;
-	}
-	bool TryLoadViewerCache(string path, out ViewerCacheData cache) {
-		cache = default!;
-		if (!File.Exists(path)) return false;
-
-		try {
-			using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan);
-			using var reader = new BinaryReader(fs, Encoding.UTF8);
-
-			if (!reader.ReadString().Equals(ViewerCacheMagic, StringComparison.Ordinal)) return false;
-			if (reader.ReadInt32() != ViewerCacheVersion) return false;
-
-			string firstFile = reader.ReadString();
-			var locations = ReadStringDictionary(reader, StringComparer.OrdinalIgnoreCase);
-			var tree = ReadNodeList(reader);
-
-			cache = new ViewerCacheData(firstFile, tree, locations);
-			return true;
-		} catch {
-			return false;
-		}
-	}
-	void SaveViewerCache(string path, ViewerCacheData cache) {
-		try {
-			Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-			using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 65536, FileOptions.SequentialScan);
-			using var writer = new BinaryWriter(fs, Encoding.UTF8);
-
-			writer.Write(ViewerCacheMagic);
-			writer.Write(ViewerCacheVersion);
-			writer.Write(cache.FirstFile);
-			WriteStringDictionary(writer, cache.ContentLocations);
-			WriteNodeList(writer, cache.Tree);
-		} catch {
-		}
-	}
-	static void WriteStringDictionary(BinaryWriter writer, Dictionary<string, string> items) {
-		writer.Write(items.Count);
-		foreach (var kv in items) {
-			writer.Write(kv.Key);
-			writer.Write(kv.Value);
-		}
-	}
-	static Dictionary<string, string> ReadStringDictionary(BinaryReader reader, StringComparer comparer) {
-		int count = reader.ReadInt32();
-		var items = new Dictionary<string, string>(count, comparer);
-		for (int i = 0; i < count; i++) {
-			items[reader.ReadString()] = reader.ReadString();
-		}
-		return items;
-	}
-	static void WriteNodeList(BinaryWriter writer, List<Node> nodes) {
-		writer.Write(nodes.Count);
-		foreach (var node in nodes) {
-			WriteNode(writer, node);
-		}
-	}
-	static List<Node> ReadNodeList(BinaryReader reader) {
-		int count = reader.ReadInt32();
-		var nodes = new List<Node>(count);
-		for (int i = 0; i < count; i++) {
-			nodes.Add(ReadNode(reader));
-		}
-		return nodes;
-	}
-	static void WriteNode(BinaryWriter writer, Node node) {
-		writer.Write(node.name);
-		writer.Write(node.path);
-		writer.Write(node.keepNumbering);
-		writer.Write(node.children != null);
-		if (node.children != null) {
-			WriteNodeList(writer, node.children);
-		}
-	}
-	static Node ReadNode(BinaryReader reader) {
-		var node = new Node {
-			name = reader.ReadString(),
-			path = reader.ReadString(),
-			keepNumbering = reader.ReadBoolean()
-		};
-
-		if (reader.ReadBoolean()) {
-			node.children = ReadNodeList(reader);
-		}
-
-		return node;
-	}
-	void BuildLinkIndex() {
-		Parallel.ForEach(
-			Directory.EnumerateFiles(baseRoot, "*.mhtml", SearchOption.AllDirectories),
-			file => {
-				Span<byte> buffer = stackalloc byte[512];
-				using var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, 512, FileOptions.SequentialScan);
-
-				int read = fs.Read(buffer);
-				if (read <= 0) return;
-
-				var text = Encoding.ASCII.GetString(buffer.Slice(0, read));
-
-				int idx = text.IndexOf("Snapshot-Content-Location:", StringComparison.OrdinalIgnoreCase);
-				if (idx < 0) return;
-
-				int start = idx + 26;
-				int end = text.IndexOf('\n', start);
-				if (end < 0) end = text.Length;
-
-				string loc = text[start..end].Trim();
-				loc = NormalizeUrl(loc);
-
-				contentLocationMap.TryAdd(loc, file);
-			});
+		firstFilePath = cache.FirstFile;
 	}
 	bool TryResolveMhtml(string url, out string file, out string fragment) {
 		file = string.Empty;
@@ -909,260 +797,10 @@ internal sealed class WebView : IDisposable {
 		int hashIndex = url.IndexOf('#');
 		if (hashIndex >= 0) fragment = url[(hashIndex + 1)..];
 
-		string baseUrl = NormalizeUrl(url);
+		string baseUrl = ContentLocationIndexBuilder.NormalizeUrl(url);
 
 		if (contentLocationMap.TryGetValue(baseUrl, out file!)) return true;
 		else return false;
-	}
-	string NormalizeUrl(string url) {
-		if (string.IsNullOrWhiteSpace(url)) return string.Empty;
-		url = url.Trim();
-		// buang fragment & query
-		int cut = url.IndexOfAny(new[] { '?', '#' });
-		if (cut >= 0) url = url[..cut];
-		// buang trailing slash
-		if (url.EndsWith("/")) url = url[..^1];
-		return url;
-	}
-	List<Node> BuildTree(string root) {
-		// 1. Scan semua file
-		var allFiles = Directory
-			.EnumerateFiles(root, "*.mhtml", SearchOption.AllDirectories)
-			.Concat(Directory.EnumerateFiles(root, "*.html", SearchOption.AllDirectories))
-			.GroupBy(GetSwitchVariantGroupKey, StringComparer.OrdinalIgnoreCase)
-			.Select(g => g
-				.OrderBy(GetSwitchVariantPreference)
-				.ThenBy(f => f, StringComparer.OrdinalIgnoreCase)
-				.First())
-			.ToList();
-
-		// 3. Group ke folder (RAM only)
-		var filesByDir = allFiles
-			.GroupBy(f => Path.GetDirectoryName(f)!)
-			.ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
-
-		// 4. Build tree paralel
-		return BuildNode(root, filesByDir);
-	}
-	string FindFirstTreePath(List<Node> nodes) {
-		foreach (var node in nodes) {
-			if (!string.IsNullOrWhiteSpace(node.path)) return node.path;
-			if (node.children != null) {
-				string childPath = FindFirstTreePath(node.children);
-				if (!string.IsNullOrWhiteSpace(childPath)) return childPath;
-			}
-		}
-		return string.Empty;
-	}
-	List<Node> BuildNode(string currentDir, Dictionary<string, List<string>> filesByDir) {
-		var items = new ConcurrentBag<Node>();
-
-		// === FILES ===
-		if (filesByDir.TryGetValue(currentDir, out var files)) {
-			Parallel.ForEach(files, file => {
-				items.Add(new Node {
-					name = DecodeTreeName(GetSwitchVariantBaseName(Path.GetFileNameWithoutExtension(file))),
-					path = file,
-					keepNumbering = IsInsideApiReferencePath(file)
-				});
-			});
-		}
-
-		// === DIRECTORIES ===
-		var dirs = Directory.EnumerateDirectories(currentDir);
-
-		Parallel.ForEach(dirs, dir => {
-
-			// cek cepat tanpa IO
-			bool hasContent =
-				filesByDir.ContainsKey(dir) ||
-				filesByDir.Keys.Any(k =>
-					k.StartsWith(dir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
-
-			if (!hasContent) return;
-
-			var children = BuildNode(dir, filesByDir);
-
-			string? twinFile = filesByDir.TryGetValue(currentDir, out var currentFiles)
-				? currentFiles.FirstOrDefault(f =>
-					GetSwitchVariantBaseName(Path.GetFileNameWithoutExtension(f))
-						.Equals(Path.GetFileName(dir), StringComparison.OrdinalIgnoreCase))
-				: null;
-
-			string target = twinFile ?? FindFirstFromCache(dir, filesByDir);
-
-			items.Add(new Node {
-				name = DecodeTreeName(Path.GetFileName(dir)),
-				path = target,
-				keepNumbering = IsInsideApiReferencePath(dir),
-				children = children
-			});
-		});
-
-		// sorting tetap di akhir (single-thread)
-		return SortTreeItems(currentDir, items);
-	}
-	bool IsApiReferencePath(string path) {
-		return GetApiReferenceDepth(path) >= 0;
-	}
-	bool IsInsideApiReferencePath(string path) {
-		return GetApiReferenceDepth(path) > 0;
-	}
-	int GetApiReferenceDepth(string path) {
-		string fullPath = Path.GetFullPath(path);
-		string[] parts = fullPath.Split(
-			new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
-			StringSplitOptions.RemoveEmptyEntries
-		);
-
-		for (int i = 0; i < parts.Length; i++) {
-			string name = NormalizeNumberedFolderName(parts[i]);
-			if (name is "Unreal Engine Blueprint API Reference"
-				or "Unreal Engine C++ API Reference"
-				or "Unreal Engine Python API Documentation") {
-				return parts.Length - i - 1;
-			}
-		}
-		return -1;
-	}
-	static string NormalizeNumberedFolderName(string name) {
-		return Regex.Replace(name, @"^\d+\.\s*", "");
-	}
-	IOrderedEnumerable<string> SortFilesForTree(string dir, IEnumerable<string> files) {
-		return IsApiReferencePath(dir)
-			? files.OrderBy(f => Path.GetFileNameWithoutExtension(f), new NaturalComparer())
-			: files
-				.OrderBy(f => ExtractNumber(Path.GetFileName(f)))
-				.ThenBy(f => f, StringComparer.OrdinalIgnoreCase);
-	}
-	List<Node> SortTreeItems(string currentDir, IEnumerable<Node> items) {
-		IEnumerable<Node> deduped = items
-			.GroupBy(x => x.name, StringComparer.OrdinalIgnoreCase)
-			.Select(g => g.FirstOrDefault(n => n.children != null) ?? g.First());
-
-		return (IsApiReferencePath(currentDir)
-				? deduped.OrderBy(n => n.name, new NaturalComparer())
-				: deduped.OrderBy(n => ExtractNumber(n.name)).ThenBy(n => n.name, new NaturalComparer()))
-			.ToList();
-	}
-	string FindFirstFromCache(string dir, Dictionary<string, List<string>> filesByDir) {
-		IEnumerable<string> directFiles = filesByDir.TryGetValue(dir, out var files)
-			? files
-			: Enumerable.Empty<string>();
-		string? directFirst = SortFilesForTree(dir, directFiles).FirstOrDefault();
-		if (!string.IsNullOrEmpty(directFirst)) return directFirst;
-
-		var nestedFiles = filesByDir
-			.Where(kv => kv.Key.StartsWith(dir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-			.SelectMany(kv => kv.Value);
-		return SortFilesForTree(dir, nestedFiles).FirstOrDefault() ?? string.Empty;
-	}
-	string DecodeTreeName(string name) {
-		string normalized = Regex.Replace(
-			name,
-			@"&(#\d+|#x[0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]+)_",
-			"&$1;"
-		);
-		return WebUtility.HtmlDecode(normalized);
-	}
-	string GetSwitchVariantGroupKey(string file) {
-		string dir = Path.GetDirectoryName(file) ?? "";
-		string ext = Path.GetExtension(file);
-		string baseName = GetSwitchVariantBaseName(Path.GetFileNameWithoutExtension(file));
-		return $"{dir}|{ext}|{baseName}";
-	}
-	static string GetSwitchVariantBaseName(string name) {
-		string current = name;
-		while (true) {
-			Match match = Regex.Match(current, @"^(?<base>.+?)\s*\[(?<variant>[^\]]+)\]\s*$");
-			if (!match.Success) return current.TrimEnd();
-
-			string variant = NormalizeSwitchVariant(match.Groups["variant"].Value);
-			if (!IsKnownSwitchVariant(variant)) return current.TrimEnd();
-
-			current = match.Groups["base"].Value;
-		}
-	}
-	static int GetSwitchVariantPreference(string file) {
-		List<string> variants = GetSwitchVariants(Path.GetFileNameWithoutExtension(file));
-		bool hasWindows = variants.Contains("windows");
-		bool hasBlueprint = variants.Contains("blueprint");
-
-		if (hasWindows && hasBlueprint) return 0;
-		if (hasWindows) return 1;
-		if (hasBlueprint) return 2;
-		if (variants.Count == 0) return 3;
-		if (variants.Contains("c++") || variants.Contains("cpp") || variants.Contains("cplusplus")) return 4;
-		if (variants.Contains("linux")) return 5;
-		if (variants.Contains("macos") || variants.Contains("mac") || variants.Contains("apple")) return 6;
-		return 10;
-	}
-	static List<string> GetSwitchVariants(string name) {
-		var variants = new List<string>();
-		string current = name;
-		while (true) {
-			Match match = Regex.Match(current, @"^(?<base>.+?)\s*\[(?<variant>[^\]]+)\]\s*$");
-			if (!match.Success) return variants;
-
-			string variant = NormalizeSwitchVariant(match.Groups["variant"].Value);
-			if (!IsKnownSwitchVariant(variant)) return variants;
-
-			variants.Add(variant);
-			current = match.Groups["base"].Value;
-		}
-	}
-	static string NormalizeSwitchVariant(string value) {
-		string normalized = value.Trim().Trim('-').Trim().ToLowerInvariant();
-		return normalized switch {
-			"mac os" => "macos",
-			"mac-os" => "macos",
-			"mac_os" => "macos",
-			"c plus plus" => "cplusplus",
-			"c-plus-plus" => "cplusplus",
-			"c_plus_plus" => "cplusplus",
-			_ => normalized
-		};
-	}
-	static bool IsKnownSwitchVariant(string variant) {
-		return variant is "windows" or "linux" or "macos" or "mac" or "apple" or
-			"blueprint" or "c++" or "cpp" or "cplusplus";
-	}
-	byte[] LoadEmbeddedBytes(string resourceName){
-		var asm = typeof(WebView).Assembly;
-		string resName = asm
-			.GetManifestResourceNames()
-			.First(x => x.EndsWith(resourceName, StringComparison.Ordinal));
-		using var stream = asm.GetManifestResourceStream(resName);
-		using var ms = new MemoryStream();
-		stream!.CopyTo(ms);
-		return ms.ToArray();
-	}
-	string LoadEmbedded(string resourceName) {
-		var asm = typeof(WebView).Assembly;
-		string resName = asm.GetManifestResourceNames().First(x => x.EndsWith(resourceName, StringComparison.Ordinal));
-		using var stream = asm.GetManifestResourceStream(resName);
-		using var reader = new StreamReader(stream!);
-		return reader.ReadToEnd();
-	}
-	bool isFirstFileInit = false;
-	string FirstFile = string.Empty;
-	string FindFirstFile(string root) {
-		if (isFirstFileInit) return FirstFile;
-		var files = Directory.GetFiles(root, "*.mhtml", SearchOption.AllDirectories)
-			.GroupBy(GetSwitchVariantGroupKey, StringComparer.OrdinalIgnoreCase)
-			.Select(g => g
-				.OrderBy(GetSwitchVariantPreference)
-				.ThenBy(f => f, StringComparer.OrdinalIgnoreCase)
-				.First())
-			.OrderBy(f => ExtractNumber(Path.GetFileName(f)))
-			.ThenBy(f => f);
-		if (files.Any()) FirstFile = files.First();
-		isFirstFileInit = true;
-		return FirstFile;
-	}
-	int ExtractNumber(string name) {
-		string[] parts = name.Split('.');
-		return int.TryParse(parts[0], out int n) ? n : int.MaxValue;
 	}
 	void ViewerWebResourceRequested(object? sender, CoreWebView2WebResourceRequestedEventArgs e) {
 		if (viewerWeb == null || currentDocument == null) return;
@@ -1200,287 +838,23 @@ internal sealed class WebView : IDisposable {
 		return document.ResourcesByUrl.TryGetValue(requestUrl, out resource!);
 	}
 	LoadedDocument LoadDocument(string file) {
-		string content = File.ReadAllText(file);
-		string? boundary = TryExtractBoundary(content);
-		if (string.IsNullOrWhiteSpace(boundary)) {
-			throw new InvalidOperationException("Invalid MHTML: multipart boundary not found.");
-		}
-
-		string marker = "--" + boundary;
-		string[] segments = content.Split(marker, StringSplitOptions.None);
-		if (segments.Length < 2) {
-			throw new InvalidOperationException("Invalid MHTML: no multipart sections found.");
-		}
-
-		var resourcesByUrl = new Dictionary<string, ResourceEntry>(StringComparer.Ordinal);
-		var resourcesByCid = new Dictionary<string, ResourceEntry>(StringComparer.OrdinalIgnoreCase);
-		string? rootHtml = null;
-
-		for (int i = 1; i < segments.Length; i++) {
-			string segment = segments[i];
-			if (segment.StartsWith("--", StringComparison.Ordinal)) break;
-
-			segment = segment.TrimStart('\r', '\n');
-			if (string.IsNullOrWhiteSpace(segment)) continue;
-
-			MhtmlPart part = ParsePart(segment);
-			if (rootHtml == null && part.ContentType.StartsWith("text/html", StringComparison.OrdinalIgnoreCase)) {
-				rootHtml = RewriteCidUrls(DecodePartText(part.Body, part.TransferEncoding, part.ContentType));
-			}
-
-			ResourceEntry? resource = CreateResourceEntry(part, offlineAssets);
-			if (resource == null) continue;
-
-			if (!string.IsNullOrWhiteSpace(part.ContentLocation)) {
-				string location = part.ContentLocation.Trim();
-				if (!location.StartsWith("cid:", StringComparison.OrdinalIgnoreCase) && !resourcesByUrl.ContainsKey(location)) {
-					resourcesByUrl[location] = resource;
-				}
-
-				string cidFromLocation = NormalizeCidToken(location);
-				if (!string.IsNullOrEmpty(cidFromLocation) && !resourcesByCid.ContainsKey(cidFromLocation)) {
-					resourcesByCid[cidFromLocation] = resource;
-				}
-			}
-
-			if (!string.IsNullOrWhiteSpace(part.ContentId)) {
-				string cid = NormalizeCidToken(part.ContentId);
-				if (!string.IsNullOrEmpty(cid) && !resourcesByCid.ContainsKey(cid)) {
-					resourcesByCid[cid] = resource;
-				}
-			}
-		}
-
-		if (string.IsNullOrWhiteSpace(rootHtml)) {
-			throw new InvalidOperationException("Invalid MHTML: root HTML part not found.");
-		}
-
-		return new LoadedDocument(rootHtml, Encoding.UTF8.GetBytes(rootHtml), resourcesByUrl, resourcesByCid);
-	}
-	static string RewriteCidUrls(string html) {
-		return Regex.Replace(
-			html,
-			@"cid:([^\s""'<>())]+)",
-			match => BuildLocalCidUrl(match.Groups[1].Value),
-			RegexOptions.IgnoreCase
-		);
-	}
-	static string BuildLocalCidUrl(string cid) {
-		return $"https://{DocumentResourceHost}/cid/{Uri.EscapeDataString(NormalizeCidToken(cid))}";
-	}
-	static string NormalizeCidToken(string cid) {
-		if (string.IsNullOrWhiteSpace(cid)) return string.Empty;
-		cid = cid.Trim();
-		if (cid.StartsWith("cid:", StringComparison.OrdinalIgnoreCase)) cid = cid[4..];
-		if (cid.StartsWith("<", StringComparison.Ordinal) && cid.EndsWith(">", StringComparison.Ordinal) && cid.Length > 2) {
-			cid = cid[1..^1];
-		}
-		return cid;
-	}
-	static string? TryExtractBoundary(string content) {
-		var match = Regex.Match(content, "boundary=\"([^\"]+)\"", RegexOptions.IgnoreCase);
-		return match.Success ? match.Groups[1].Value : null;
-	}
-	static MhtmlPart ParsePart(string segment) {
-		int separatorLength = 4;
-		int separator = segment.IndexOf("\r\n\r\n", StringComparison.Ordinal);
-		if (separator < 0) {
-			separator = segment.IndexOf("\n\n", StringComparison.Ordinal);
-			separatorLength = 2;
-		}
-
-		string headerText;
-		string body;
-		if (separator < 0) {
-			headerText = segment.Trim();
-			body = string.Empty;
-		} else {
-			headerText = segment[..separator].TrimEnd();
-			body = segment[(separator + separatorLength)..];
-		}
-
-		var headers = ParseHeaders(headerText);
-		headers.TryGetValue("Content-Type", out string? contentType);
-		headers.TryGetValue("Content-Transfer-Encoding", out string? transferEncoding);
-		headers.TryGetValue("Content-Location", out string? contentLocation);
-		headers.TryGetValue("Content-ID", out string? contentId);
-
-		return new MhtmlPart(
-			contentType ?? "application/octet-stream",
-			transferEncoding ?? "8bit",
-			contentLocation ?? string.Empty,
-			contentId ?? string.Empty,
-			body
-		);
-	}
-	static Dictionary<string, string> ParseHeaders(string headerText) {
-		var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-		string currentName = string.Empty;
-
-		foreach (string rawLine in headerText.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n')) {
-			if (string.IsNullOrWhiteSpace(rawLine)) continue;
-
-			if ((rawLine[0] == ' ' || rawLine[0] == '\t') && currentName.Length > 0) {
-				headers[currentName] += " " + rawLine.Trim();
-				continue;
-			}
-
-			int colonIndex = rawLine.IndexOf(':');
-			if (colonIndex <= 0) continue;
-
-			currentName = rawLine[..colonIndex].Trim();
-			headers[currentName] = rawLine[(colonIndex + 1)..].Trim();
-		}
-
-		return headers;
-	}
-	static ResourceEntry? CreateResourceEntry(MhtmlPart part, Dictionary<string, OfflineAsset> offlineAssets) {
-		if (HasBody(part.Body)) {
-			return new ResourceEntry(part.ContentType, DecodePartBytes(part.Body, part.TransferEncoding, part.ContentType), null);
-		}
-
-		if (!string.IsNullOrWhiteSpace(part.ContentLocation) &&
-			offlineAssets.TryGetValue(part.ContentLocation.Trim(), out var asset)) {
-			return new ResourceEntry(asset.ContentType, null, asset.FilePath);
-		}
-
-		return null;
-	}
-	static bool HasBody(string body) {
-		return !string.IsNullOrWhiteSpace(body);
-	}
-	static byte[] DecodePartBytes(string body, string transferEncoding, string contentType) {
-		string normalizedEncoding = transferEncoding.Trim().ToLowerInvariant();
-		return normalizedEncoding switch {
-			"base64" => DecodeBase64Bytes(body),
-			"quoted-printable" => DecodeQuotedPrintableToBytes(body),
-			_ => Encoding.UTF8.GetBytes(body)
-		};
-	}
-	static string DecodePartText(string body, string transferEncoding, string contentType) {
-		return Encoding.UTF8.GetString(DecodePartBytes(body, transferEncoding, contentType));
-	}
-	static byte[] DecodeQuotedPrintableToBytes(string input) {
-		using var ms = new MemoryStream(input.Length);
-
-		for (int i = 0; i < input.Length; i++) {
-			char ch = input[i];
-			if (ch != '=') {
-				ms.WriteByte((byte)ch);
-				continue;
-			}
-
-			if (i + 1 < input.Length && input[i + 1] == '\r') {
-				i++;
-				if (i + 1 < input.Length && input[i + 1] == '\n') i++;
-				continue;
-			}
-			if (i + 1 < input.Length && input[i + 1] == '\n') {
-				i++;
-				continue;
-			}
-			if (i + 2 < input.Length &&
-				IsHex(input[i + 1]) &&
-				IsHex(input[i + 2])) {
-				byte value = (byte)((HexToInt(input[i + 1]) << 4) | HexToInt(input[i + 2]));
-				ms.WriteByte(value);
-				i += 2;
-				continue;
-			}
-
-			ms.WriteByte((byte)'=');
-		}
-
-		return ms.ToArray();
-	}
-	static bool IsHex(char c) {
-		return (c >= '0' && c <= '9')
-			|| (c >= 'a' && c <= 'f')
-			|| (c >= 'A' && c <= 'F');
-	}
-	static int HexToInt(char c) {
-		return c switch {
-			>= '0' and <= '9' => c - '0',
-			>= 'a' and <= 'f' => c - 'a' + 10,
-			>= 'A' and <= 'F' => c - 'A' + 10,
-			_ => 0
-		};
-	}
-	static byte[] DecodeBase64Bytes(string input) {
-		string normalized = new(input.Where(c => !char.IsWhiteSpace(c)).ToArray());
-		return Convert.FromBase64String(normalized);
-	}
-	static Dictionary<string, OfflineAsset> LoadOfflineAssetIndex(string path, string rootDirectory) {
-		var map = new Dictionary<string, OfflineAsset>(StringComparer.Ordinal);
-		if (!File.Exists(path)) return map;
-
-		foreach (string line in File.ReadLines(path).Skip(1)) {
-			if (string.IsNullOrWhiteSpace(line)) continue;
-
-			string[] parts = line.Split('\t');
-			if (parts.Length < 6) continue;
-
-			string link = parts[0].Trim();
-			string relativePath = parts[1].Trim().Replace('/', Path.DirectorySeparatorChar);
-			string contentType = parts[2].Trim();
-			string fullPath = Path.GetFullPath(Path.Combine(rootDirectory, relativePath));
-
-			map[link] = new OfflineAsset(fullPath, contentType);
-		}
-
-		return map;
+		return MhtmlDocumentLoader.Load(file, offlineAssets, DocumentResourceHost);
 	}
 	public void Dispose() {
 		viewerController?.Close();
 		navController?.Close();
 		titleController?.Close();
-	}
-	sealed record OfflineAsset(string FilePath, string ContentType);
-	sealed record ViewerCacheData(
-		string FirstFile,
-		List<Node> Tree,
-		Dictionary<string, string> ContentLocations
-	);
-	sealed record LoadedDocument(
-		string Html,
-		byte[] HtmlBytes,
-		Dictionary<string, ResourceEntry> ResourcesByUrl,
-		Dictionary<string, ResourceEntry> ResourcesByCid
-	);
-	sealed record ResourceEntry(string ContentType, byte[]? Bytes, string? FilePath);
-	sealed record MhtmlPart(
-		string ContentType,
-		string TransferEncoding,
-		string ContentLocation,
-		string ContentId,
-		string Body
-	);
-	sealed record NavigationEntry(string FilePath, string Fragment, string MediaUrl) {
-		public static NavigationEntry Document(string filePath, string fragment) {
-			return new NavigationEntry(filePath, fragment, string.Empty);
+		if (backgroundBrush != IntPtr.Zero) {
+			Native.DeleteObject(backgroundBrush);
+			backgroundBrush = IntPtr.Zero;
 		}
-
-		public static NavigationEntry Media(string url) {
-			return new NavigationEntry(string.Empty, string.Empty, url);
+		if (largeIcon != IntPtr.Zero) {
+			Native.DestroyIcon(largeIcon);
+			largeIcon = IntPtr.Zero;
 		}
-	}
-	sealed class NaturalComparer : IComparer<string> {
-		public int Compare(string? a, string? b) {
-			string[] aa = Regex.Split(a ?? "", @"(\d+)");
-			string[] bb = Regex.Split(b ?? "", @"(\d+)");
-			int len = Math.Max(aa.Length, bb.Length);
-
-			for (int i = 0; i < len; i++) {
-				if (i >= aa.Length) return -1;
-				if (i >= bb.Length) return 1;
-				if (int.TryParse(aa[i], out int na) && int.TryParse(bb[i], out int nb)) {
-					if (na != nb) return na.CompareTo(nb);
-				} else {
-					int cmp = string.Compare(aa[i], bb[i], StringComparison.OrdinalIgnoreCase);
-					if (cmp != 0) return cmp;
-				}
-			}
-			return 0;
+		if (smallIcon != IntPtr.Zero) {
+			Native.DestroyIcon(smallIcon);
+			smallIcon = IntPtr.Zero;
 		}
 	}
 }
