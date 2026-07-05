@@ -319,7 +319,7 @@
 
 			const title = document.createElement("span");
 			title.className = "title";
-			title.textContent = node.name.replace(/^\d+(\.\d+)*\.?\s*/, "");
+			title.textContent = node.keepNumbering ? node.name : node.name.replace(/^\d+(\.\d+)*\.?\s*/, "");
 			title.onclick = () => {
 				if (!node.path || item.classList.contains('active')) return;
 				setActive(item);

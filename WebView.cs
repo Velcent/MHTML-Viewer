@@ -32,7 +32,7 @@ internal sealed class WebView : IDisposable {
 	const string LocalMediaHost = "media.local";
 	const string ViewerCacheFileName = "viewer-cache.bin";
 	const string ViewerCacheMagic = "MHTMLViewerCache";
-	const int ViewerCacheVersion = 4;
+	const int ViewerCacheVersion = 0;
 	bool isTitleUpdated = false;
 	bool isTitleInit = false;
 	bool isLoading = false;
@@ -220,7 +220,7 @@ internal sealed class WebView : IDisposable {
 		ResizeWebView();
 
 		navWeb.Settings.AreDevToolsEnabled = false;
-		viewerWeb.Settings.AreDevToolsEnabled = true;
+		viewerWeb.Settings.AreDevToolsEnabled = false;
 		titleWeb.Settings.AreDevToolsEnabled = false;
 		navWeb.Settings.AreDefaultContextMenusEnabled = false;
 		viewerWeb.Settings.AreDefaultContextMenusEnabled = true;
@@ -857,6 +857,7 @@ internal sealed class WebView : IDisposable {
 	static void WriteNode(BinaryWriter writer, Node node) {
 		writer.Write(node.name);
 		writer.Write(node.path);
+		writer.Write(node.keepNumbering);
 		writer.Write(node.children != null);
 		if (node.children != null) {
 			WriteNodeList(writer, node.children);
@@ -865,7 +866,8 @@ internal sealed class WebView : IDisposable {
 	static Node ReadNode(BinaryReader reader) {
 		var node = new Node {
 			name = reader.ReadString(),
-			path = reader.ReadString()
+			path = reader.ReadString(),
+			keepNumbering = reader.ReadBoolean()
 		};
 
 		if (reader.ReadBoolean()) {
@@ -949,7 +951,8 @@ internal sealed class WebView : IDisposable {
 			Parallel.ForEach(files, file => {
 				items.Add(new Node {
 					name = DecodeTreeName(GetSwitchVariantBaseName(Path.GetFileNameWithoutExtension(file))),
-					path = file
+					path = file,
+					keepNumbering = IsApiReferencePath(file)
 				});
 			});
 		}
@@ -980,34 +983,59 @@ internal sealed class WebView : IDisposable {
 			items.Add(new Node {
 				name = DecodeTreeName(Path.GetFileName(dir)),
 				path = target,
+				keepNumbering = IsApiReferencePath(dir),
 				children = children
 			});
 		});
 
 		// sorting tetap di akhir (single-thread)
-		return items
+		return SortTreeItems(currentDir, items);
+	}
+	bool IsApiReferencePath(string path) {
+		return IsPathInsideNamedFolder(path, "Unreal Engine Blueprint API Reference")
+			|| IsPathInsideNamedFolder(path, "Unreal Engine C++ API Reference")
+			|| IsPathInsideNamedFolder(path, "Unreal Engine Python API Documentation");
+	}
+	bool IsPathInsideNamedFolder(string path, string folderName) {
+		string fullPath = Path.GetFullPath(path);
+		string[] parts = fullPath.Split(
+			new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+			StringSplitOptions.RemoveEmptyEntries
+		);
+		return parts.Any(part =>
+			NormalizeNumberedFolderName(part).Equals(folderName, StringComparison.OrdinalIgnoreCase));
+	}
+	static string NormalizeNumberedFolderName(string name) {
+		return Regex.Replace(name, @"^\d+\.\s*", "");
+	}
+	IOrderedEnumerable<string> SortFilesForTree(string dir, IEnumerable<string> files) {
+		return IsApiReferencePath(dir)
+			? files.OrderBy(f => Path.GetFileNameWithoutExtension(f), new NaturalComparer())
+			: files
+				.OrderBy(f => ExtractNumber(Path.GetFileName(f)))
+				.ThenBy(f => f, StringComparer.OrdinalIgnoreCase);
+	}
+	List<Node> SortTreeItems(string currentDir, IEnumerable<Node> items) {
+		IEnumerable<Node> deduped = items
 			.GroupBy(x => x.name, StringComparer.OrdinalIgnoreCase)
-			.Select(g => g.FirstOrDefault(n => n.children != null) ?? g.First())
-			.OrderBy(n => ExtractNumber(n.name))
-			.ThenBy(n => n.name, new NaturalComparer())
+			.Select(g => g.FirstOrDefault(n => n.children != null) ?? g.First());
+
+		return (IsApiReferencePath(currentDir)
+				? deduped.OrderBy(n => n.name, new NaturalComparer())
+				: deduped.OrderBy(n => ExtractNumber(n.name)).ThenBy(n => n.name, new NaturalComparer()))
 			.ToList();
 	}
 	string FindFirstFromCache(string dir, Dictionary<string, List<string>> filesByDir) {
-		if (filesByDir.TryGetValue(dir, out var files) && files.Count > 0) {
-			return files
-				.OrderBy(f => ExtractNumber(Path.GetFileName(f)))
-				.ThenBy(f => f)
-				.First();
-		}
-		foreach (var kv in filesByDir) {
-			if (kv.Key.StartsWith(dir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) {
-				return kv.Value
-					.OrderBy(f => ExtractNumber(Path.GetFileName(f)))
-					.ThenBy(f => f)
-					.First();
-			}
-		}
-		return string.Empty;
+		IEnumerable<string> directFiles = filesByDir.TryGetValue(dir, out var files)
+			? files
+			: Enumerable.Empty<string>();
+		string? directFirst = SortFilesForTree(dir, directFiles).FirstOrDefault();
+		if (!string.IsNullOrEmpty(directFirst)) return directFirst;
+
+		var nestedFiles = filesByDir
+			.Where(kv => kv.Key.StartsWith(dir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+			.SelectMany(kv => kv.Value);
+		return SortFilesForTree(dir, nestedFiles).FirstOrDefault() ?? string.Empty;
 	}
 	string DecodeTreeName(string name) {
 		string normalized = Regex.Replace(
