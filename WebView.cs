@@ -32,7 +32,7 @@ internal sealed class WebView : IDisposable {
 	const string LocalMediaHost = "media.local";
 	const string ViewerCacheFileName = "viewer-cache.bin";
 	const string ViewerCacheMagic = "MHTMLViewerCache";
-	const int ViewerCacheVersion = 0;
+	const int ViewerCacheVersion = 8;
 	bool isTitleUpdated = false;
 	bool isTitleInit = false;
 	bool isLoading = false;
@@ -255,10 +255,11 @@ internal sealed class WebView : IDisposable {
 			BuildLinkIndex();
 
 			await ShowTitleLoading(80, "Building File Tree...");
-			string builtFirst = FindFirstFile(baseRoot);
+			List<Node> builtTree = BuildTree(baseRoot);
+			string builtFirst = FindFirstTreePath(builtTree);
 			viewerCache = new ViewerCacheData(
 				builtFirst,
-				BuildTree(baseRoot),
+				builtTree,
 				contentLocationMap.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase)
 			);
 			SaveViewerCache(cachePath, viewerCache);
@@ -942,6 +943,16 @@ internal sealed class WebView : IDisposable {
 
 		// 4. Build tree paralel
 		return BuildNode(root, filesByDir);
+	}
+	string FindFirstTreePath(List<Node> nodes) {
+		foreach (var node in nodes) {
+			if (!string.IsNullOrWhiteSpace(node.path)) return node.path;
+			if (node.children != null) {
+				string childPath = FindFirstTreePath(node.children);
+				if (!string.IsNullOrWhiteSpace(childPath)) return childPath;
+			}
+		}
+		return string.Empty;
 	}
 	List<Node> BuildNode(string currentDir, Dictionary<string, List<string>> filesByDir) {
 		var items = new ConcurrentBag<Node>();
