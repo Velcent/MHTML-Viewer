@@ -15,7 +15,34 @@
 			position: relative;
 			display: block;
 		}
-		ng-select.mhtml-switch-ready .ng-select-container { cursor: pointer; }
+		ng-select.mhtml-switch-ready .ng-select-container {
+			cursor: pointer;
+			position: relative;
+		}
+		ng-select.mhtml-switch-ready .ng-value-container {
+			opacity: 0;
+			pointer-events: none;
+		}
+		ng-select.mhtml-switch-ready .mhtml-switch-trigger-label {
+			position: absolute;
+			inset: 0 24px 0 0;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			min-width: 0;
+			padding-left: 10px;
+			overflow: hidden;
+			color: inherit;
+			font: inherit;
+			pointer-events: none;
+			text-align: center;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+		ng-select.mhtml-switch-ready .ng-arrow-wrapper {
+			position: relative;
+			z-index: 1;
+		}
 		ng-select.mhtml-switch-ready .ng-input input { pointer-events: none; }
 		ng-select.mhtml-switch-ready.ng-select-opened .ng-arrow { transform: rotate(180deg); }
 		ng-select.mhtml-switch-ready .ng-dropdown-panel {
@@ -159,6 +186,7 @@
 		select.classList.add("mhtml-switch-ready");
 		select.setAttribute("tabindex", "0");
 		select.setAttribute("role", "button");
+		ensureTriggerLabel(select);
 
 		let panel = select.querySelector(":scope > .ng-dropdown-panel");
 		if (!panel) {
@@ -200,6 +228,19 @@
 		});
 	}
 
+	function ensureTriggerLabel(select) {
+		const container = select.querySelector(":scope > .ng-select-container");
+		if (!container) return null;
+
+		let label = container.querySelector(":scope > .mhtml-switch-trigger-label");
+		if (!label) {
+			label = document.createElement("span");
+			label.className = "mhtml-switch-trigger-label";
+			container.appendChild(label);
+		}
+		return label;
+	}
+
 	function navigateToOption(option) {
 		if (!window.chrome || !chrome.webview || !option.path) return false;
 		chrome.webview.postMessage({
@@ -216,6 +257,8 @@
 		for (const control of controls) {
 			const labelEl = control.querySelector(".ng-value-label");
 			if (labelEl) labelEl.textContent = label;
+			const triggerLabel = control.querySelector(".mhtml-switch-trigger-label");
+			if (triggerLabel) triggerLabel.textContent = label;
 
 			const input = control.querySelector("input[role='combobox']");
 			if (input) input.setAttribute("aria-expanded", "false");
