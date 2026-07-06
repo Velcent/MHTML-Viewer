@@ -138,7 +138,9 @@
 
 		button.dataset.mhtmlBlueprintCopyReady = "true";
 		button.dataset.mhtmlBlueprintOriginalLabel = readCopyButtonLabel(button) || "Copy full snippet";
-		button.dataset.mhtmlBlueprintSuffix = button.querySelector(".ps-1")?.textContent || "";
+		button.dataset.mhtmlBlueprintSuffix = button.querySelector(".ps-1")?.textContent
+			|| formatBlueprintLineCountSuffix(readBlueprintLineCount(snippet));
+		setCopyButtonLabel(button, button.dataset.mhtmlBlueprintOriginalLabel);
 		button.addEventListener("click", async event => {
 			event.preventDefault();
 			event.stopPropagation();
@@ -199,6 +201,40 @@
 
 		const render = snippet.querySelector("blueprint-render");
 		return render ? readBlueprintCode(render) : readBlueprintCodeFromSnippet(snippet);
+	}
+
+	function readBlueprintLineCount(snippet) {
+		const sourceElements = [
+			"textarea.mhtml-full-snippet-source",
+			"textarea[data-mhtml-full-source='true']",
+			"textarea[data-blueprint-code]",
+			".visually-hidden",
+			"textarea"
+		];
+
+		for (const selector of sourceElements) {
+			const element = snippet.querySelector(selector);
+			if (!element) continue;
+
+			const declared = Number(element.dataset?.sourceLines || element.getAttribute("data-source-lines") || 0);
+			if (declared > 0) return declared;
+
+			const source = normalizeBlueprintCode("value" in element ? element.value : element.textContent);
+			if (looksLikeBlueprintCode(source)) return countBlueprintLines(source);
+		}
+
+		const source = readBlueprintCopySource(snippet);
+		return source ? countBlueprintLines(source) : 0;
+	}
+
+	function countBlueprintLines(source) {
+		if (!source) return 0;
+		return source.split(/\r\n|\r|\n/).length;
+	}
+
+	function formatBlueprintLineCountSuffix(lineCount) {
+		if (!lineCount) return "";
+		return `(${lineCount} ${lineCount === 1 ? "line" : "lines"} long)`;
 	}
 
 	function readCopyButtonLabel(button) {
