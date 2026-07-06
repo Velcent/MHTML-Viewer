@@ -869,13 +869,18 @@ internal sealed class WebView : IDisposable {
 		if (Uri.TryCreate(pathOrUrl, UriKind.Absolute, out _) && !Path.IsPathRooted(pathOrUrl)) return false;
 
 		string path = pathOrUrl;
+		if (TryResolveWorkspacePath(Uri.UnescapeDataString(path), out string fullPath) &&
+			TryResolveDocumentFullPath(fullPath, out file)) {
+			return true;
+		}
+
 		int hashIndex = path.IndexOf('#');
 		if (hashIndex >= 0) {
 			fragment = path[(hashIndex + 1)..];
 			path = path[..hashIndex];
 		}
 
-		if (!TryResolveWorkspacePath(Uri.UnescapeDataString(path), out string fullPath)) return false;
+		if (!TryResolveWorkspacePath(Uri.UnescapeDataString(path), out fullPath)) return false;
 		return TryResolveDocumentFullPath(fullPath, out file);
 	}
 	bool TryResolveDocumentFullPath(string fullPath, out string file) {
