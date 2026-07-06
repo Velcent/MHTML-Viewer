@@ -488,6 +488,9 @@ internal sealed class WebView : IDisposable {
 		await UpdateToggleSidebar();
 	}
 	async Task InjectEpicSwitch() {
+		List<SwitchVariantOption> options = BuildSwitchVariantOptions(currentFilePath);
+		string optionsJson = JsonSerializer.Serialize(options, AppJsonContext.Default.ListSwitchVariantOption);
+		await viewerWeb!.ExecuteScriptAsync($"window.__mhtmlSwitchOptions = {optionsJson};");
 		await viewerWeb!.ExecuteScriptAsync(EmbeddedResourceLoader.LoadText(EpicSwitchRes));
 	}
 	async Task InjectEpicCode() {
@@ -544,8 +547,8 @@ internal sealed class WebView : IDisposable {
 		State.Save(State.Current);
 	}
 	async void ViewerWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e) {
-		// Document scripts only send title updates; navigation commands are handled by the title/sidebar views.
-		var json = JsonDocument.Parse(e.WebMessageAsJson);
+		// Document scripts send title updates and offline widget navigation commands.
+		using var json = JsonDocument.Parse(e.WebMessageAsJson);
 		var type = json.RootElement.GetProperty("type").GetString();
 		switch (type) {
 			case "SetTitle":
@@ -556,6 +559,16 @@ internal sealed class WebView : IDisposable {
 				break;
 			case "UpdateTitle":
 				isTitleUpdated = true;
+				break;
+			case "OpenDocument":
+				string path = json.RootElement.GetProperty("path").GetString() ?? "";
+				string fragment = json.RootElement.TryGetProperty("fragment", out JsonElement fragmentElement)
+					? fragmentElement.GetString() ?? ""
+					: "";
+				if (string.IsNullOrWhiteSpace(path)) break;
+				isLoading = true;
+				if (navWeb != null) await navWeb.ExecuteScriptAsync("showLoading()");
+				await OpenDocument(path, fragment);
 				break;
 		}
 	}
@@ -1042,6 +1055,93 @@ internal sealed class WebView : IDisposable {
 				NormalizeTreePaths(node.Children);
 			}
 		}
+	}
+	List<SwitchVariantOption> BuildSwitchVariantOptions(string file) {
+		var optionsByKey = new Dictionary<string, SwitchVariantOption>(StringComparer.OrdinalIgnoreCase);
+		if (string.IsNullOrWhiteSpace(file)) return new List<SwitchVariantOption>();
+		if (!TryResolveWorkspacePath(file, out string fullPath)) return new List<SwitchVariantOption>();
+		if (!IsDocumentFile(fullPath)) return new List<SwitchVariantOption>();
+
+		string? directory = Path.GetDirectoryName(fullPath);
+		if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)) return new List<SwitchVariantOption>();
+
+		string extension = Path.GetExtension(fullPath);
+		if (!TrySplitSwitchVariantName(Path.GetFileNameWithoutExtension(fullPath), out string baseName, out _)) return new List<SwitchVariantOption>();
+
+		try {
+			foreach (string candidate in Directory.EnumerateFiles(directory)) {
+				if (!IsDocumentFile(candidate)) continue;
+				if (!Path.GetExtension(candidate).Equals(extension, StringComparison.OrdinalIgnoreCase)) continue;
+
+				string candidateName = Path.GetFileNameWithoutExtension(candidate);
+				if (!TrySplitSwitchVariantName(candidateName, out string candidateBaseName, out List<string> variants)) continue;
+				if (!candidateBaseName.Equals(baseName, StringComparison.OrdinalIgnoreCase)) continue;
+
+				string key = BuildSwitchVariantKey(variants);
+				if (string.IsNullOrEmpty(key)) continue;
+
+				string path = ToWorkspacePath(candidate);
+				bool current = candidate.Equals(fullPath, StringComparison.OrdinalIgnoreCase);
+				if (optionsByKey.TryGetValue(key, out SwitchVariantOption? existing) && !current) continue;
+
+				optionsByKey[key] = new SwitchVariantOption(key, BuildSwitchVariantLabel(variants), path, current);
+			}
+		} catch {
+			return new List<SwitchVariantOption>();
+		}
+
+		return optionsByKey.Values
+			.OrderBy(option => option.Label, StringComparer.OrdinalIgnoreCase)
+			.ToList();
+	}
+	static bool TrySplitSwitchVariantName(string name, out string baseName, out List<string> variants) {
+		baseName = string.Empty;
+		variants = new List<string>();
+		string current = name.TrimEnd();
+		while (true) {
+			Match match = Regex.Match(current, @"^(?<base>.+?)\s*\[(?<variant>[^\]]+)\]\s*$");
+			if (!match.Success) break;
+
+			string variant = CleanSwitchVariantText(match.Groups["variant"].Value);
+			if (string.IsNullOrWhiteSpace(variant)) break;
+
+			variants.Insert(0, variant);
+			current = match.Groups["base"].Value.TrimEnd();
+		}
+
+		baseName = current.TrimEnd();
+		return variants.Count > 0 && !string.IsNullOrWhiteSpace(baseName);
+	}
+	static string BuildSwitchVariantKey(IEnumerable<string> variants) {
+		return string.Join("-", variants
+			.Select(NormalizeSwitchVariantKey)
+			.Where(part => !string.IsNullOrWhiteSpace(part)));
+	}
+	static string BuildSwitchVariantLabel(IEnumerable<string> variants) {
+		return string.Join(" / ", variants
+			.Select(FormatSwitchVariantLabel)
+			.Where(part => !string.IsNullOrWhiteSpace(part)));
+	}
+	static string CleanSwitchVariantText(string value) {
+		return value.Trim().Trim('-').Trim();
+	}
+	static string NormalizeSwitchVariantKey(string value) {
+		string cleaned = CleanSwitchVariantText(value).ToLowerInvariant();
+		return Regex.Replace(cleaned, @"[^a-z0-9+#]+", "-").Trim('-');
+	}
+	static string FormatSwitchVariantLabel(string value) {
+		string cleaned = CleanSwitchVariantText(value)
+			.Replace('_', ' ')
+			.Replace('-', ' ');
+		cleaned = Regex.Replace(cleaned, @"\s+", " ").Trim();
+		if (string.IsNullOrWhiteSpace(cleaned)) return string.Empty;
+
+		return string.Join(" ", cleaned.Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(FormatSwitchVariantWord));
+	}
+	static string FormatSwitchVariantWord(string word) {
+		if (string.IsNullOrEmpty(word)) return word;
+		if (word.Any(ch => !char.IsLetter(ch))) return word.ToUpperInvariant();
+		return char.ToUpperInvariant(word[0]) + word[1..];
 	}
 
 	/// <summary>

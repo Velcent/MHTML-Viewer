@@ -1,7 +1,19 @@
+using System.Text.Json.Serialization;
+
 /// <summary>
 /// Local replacement for an online asset referenced by an MHTML part.
 /// </summary>
 internal sealed record OfflineAsset(string FilePath, string ContentType);
+
+/// <summary>
+/// Static variant page that can be opened from an offline switch control.
+/// </summary>
+internal sealed record SwitchVariantOption(
+	[property: JsonPropertyName("key")] string Key,
+	[property: JsonPropertyName("label")] string Label,
+	[property: JsonPropertyName("path")] string Path,
+	[property: JsonPropertyName("current")] bool Current
+);
 
 /// <summary>
 /// Serialized startup cache containing the first file, sidebar tree, and URL-to-file index.
