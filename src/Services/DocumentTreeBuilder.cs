@@ -120,9 +120,14 @@ internal static class DocumentTreeBuilder {
 
 		for (int i = 0; i < parts.Length; i++) {
 			string name = NormalizeNumberedFolderName(parts[i]);
-			if (name is "Unreal Engine Blueprint API Reference"
+			if (name 
+				is "Unreal Engine Blueprint API Reference"
 				or "Unreal Engine C++ API Reference"
-				or "Unreal Engine Python API Documentation") {
+				or "Unreal Engine Python API Documentation"
+				or "Unreal Engine Learning"
+				or "MetaHuman Learning"
+				or "Fortnite Learning"
+			) {
 				return parts.Length - i - 1;
 			}
 		}
