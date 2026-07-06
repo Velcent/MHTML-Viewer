@@ -220,7 +220,7 @@ internal sealed class WebView : IDisposable {
 	/// Creates WebView2 controllers, loads embedded UI, builds indexes/cache, and initializes the sidebar.
 	/// </summary>
 	public async Task InitializeAsync() {
-		workspaceRoot = Directory.GetCurrentDirectory();
+		workspaceRoot = ResolveWorkspaceRoot();
 		baseRoot = Path.Combine(workspaceRoot, "mhtml");
 
 		string tempPath = AppPaths.TempDirectory;
@@ -278,12 +278,12 @@ internal sealed class WebView : IDisposable {
 		if (!ViewerCacheStore.TryLoad(cachePath, out ViewerCacheData viewerCache)) {
 			// Cache miss: rebuild both the URL lookup and sidebar tree from the mhtml directory.
 			await ShowTitleLoading(50, "Building Link Index...");
-			foreach (var kv in ContentLocationIndexBuilder.Build(baseRoot)) {
+			foreach (var kv in ContentLocationIndexBuilder.Build(baseRoot, workspaceRoot)) {
 				contentLocationMap.TryAdd(kv.Key, kv.Value);
 			}
 
 			await ShowTitleLoading(80, "Building File Tree...");
-			List<Node> builtTree = DocumentTreeBuilder.Build(baseRoot);
+			List<Node> builtTree = DocumentTreeBuilder.Build(baseRoot, workspaceRoot);
 			string builtFirst = DocumentTreeBuilder.FindFirstTreePath(builtTree);
 			viewerCache = new ViewerCacheData(
 				builtFirst,
@@ -294,7 +294,7 @@ internal sealed class WebView : IDisposable {
 		}
 
 		ApplyViewerCache(viewerCache);
-		string first = viewerCache.FirstFile;
+		string first = firstFilePath;
 		if (string.IsNullOrEmpty(first)) {
 			Native.ShowMessage(handle, "No MHTML files found in the mhtml folder.", "Error");
 			Native.PostQuitMessage(0);
@@ -302,8 +302,10 @@ internal sealed class WebView : IDisposable {
 		}
 
 		List<Node> tree = viewerCache.Tree;
+		NormalizeTreePaths(tree);
 		viewerTree = tree;
 		titleCache.Clear();
+		NormalizePersistedState();
 		string treeJson = JsonSerializer.Serialize(tree, AppJsonContext.Default.ListNode);
 		string firstJson = JsonSerializer.Serialize(first, AppJsonContext.Default.String);
 		string stateJson = JsonSerializer.Serialize(State.Current, AppJsonContext.Default.AppState);
@@ -316,6 +318,35 @@ internal sealed class WebView : IDisposable {
 			await ShowTitleLoading(90, "Almost Ready...");
 		};
 		navWeb.NavigateToString(EmbeddedResourceLoader.LoadText(SidebarRes));
+	}
+
+	static string ResolveWorkspaceRoot() {
+		string appBase = AppContext.BaseDirectory;
+		string current = Directory.GetCurrentDirectory();
+		var candidates = new List<string>();
+		AddCandidateAndParents(candidates, appBase);
+		AddCandidateAndParents(candidates, current);
+
+		foreach (string candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase)) {
+			if (LooksLikeWorkspaceRoot(candidate)) return Path.GetFullPath(candidate);
+		}
+
+		return Path.GetFullPath(current);
+	}
+
+	static void AddCandidateAndParents(List<string> candidates, string? start) {
+		if (string.IsNullOrWhiteSpace(start)) return;
+
+		var dir = new DirectoryInfo(Path.GetFullPath(start));
+		while (dir != null) {
+			candidates.Add(dir.FullName);
+			dir = dir.Parent;
+		}
+	}
+
+	static bool LooksLikeWorkspaceRoot(string path) {
+		return Directory.Exists(Path.Combine(path, "mhtml"))
+			|| File.Exists(Path.Combine(path, "assets", "mhtml-uuid.tsv"));
 	}
 
 	/// <summary>
@@ -387,7 +418,7 @@ internal sealed class WebView : IDisposable {
 		} else {
 			string firstKnownFile = !string.IsNullOrWhiteSpace(firstFilePath)
 				? firstFilePath
-				: DocumentTreeBuilder.FindFirstFile(baseRoot);
+				: DocumentTreeBuilder.FindFirstFile(baseRoot, workspaceRoot);
 			string fallback = !string.IsNullOrWhiteSpace(file)
 				? Path.GetFileNameWithoutExtension(file)
 				: Path.GetFileNameWithoutExtension(firstKnownFile);
@@ -403,7 +434,7 @@ internal sealed class WebView : IDisposable {
 
 		string href = path.Equals(currentFile, StringComparison.OrdinalIgnoreCase)
 			? "#"
-			: new Uri(path).AbsoluteUri;
+			: path;
 		return $"<span data-link=\"true\" href=\"{WebUtility.HtmlEncode(href)}\">{encodedTitle}</span>";
 	}
 	static string CleanTreeTitle(string title) {
@@ -572,14 +603,17 @@ internal sealed class WebView : IDisposable {
 			string type = msg.RootElement.GetProperty("type").GetString() ?? "";
 			switch (type) {
 				case "setLastFile":
-					State.Current.LastFile = msg.RootElement.GetProperty("path").GetString() ?? "";
+					string lastPath = msg.RootElement.GetProperty("path").GetString() ?? "";
+					if (TryResolveDocumentPath(lastPath, out string lastFile, out _)) {
+						State.Current.LastFile = lastFile;
+					}
 					break;
 				case "open":
-					string fullPath = msg.RootElement.GetProperty("path").GetString() ?? "";
-					if (File.Exists(fullPath))
-						await OpenDocument(fullPath, "");
+					string path = msg.RootElement.GetProperty("path").GetString() ?? "";
+					if (TryResolveDocumentPath(path, out string file, out string fragment))
+						await OpenDocument(file, fragment);
 					else
-						await ShowError("File not found:\\n" + fullPath);
+						await ShowError("File not found:\\n" + path);
 					break;
 				case "back":
 					await NavigateHistory(-1);
@@ -714,7 +748,7 @@ internal sealed class WebView : IDisposable {
 	/// Resolves a title-bar link click into the same navigation pipeline used by the viewer.
 	/// </summary>
 	async Task OpenLink(string url) {
-		if (TryResolveLocalDocument(url, out string localFile, out string localFragment)) {
+		if (TryResolveDocumentPath(url, out string localFile, out string localFragment)) {
 			if (await TryNavigateCurrentDocumentFragment(localFile, localFragment)) return;
 			await OpenDocument(localFile, localFragment);
 			return;
@@ -733,6 +767,7 @@ internal sealed class WebView : IDisposable {
 	/// Scrolls inside the current document when only the fragment changed.
 	/// </summary>
 	async Task<bool> TryNavigateCurrentDocumentFragment(string file, string fragment, bool addHistory = true) {
+		file = ToWorkspacePath(file);
 		if (!file.Equals(currentFilePath, StringComparison.OrdinalIgnoreCase)) return false;
 		if (viewerWeb == null) return false;
 
@@ -806,14 +841,69 @@ internal sealed class WebView : IDisposable {
 		if (!uri.IsFile) return false;
 
 		string fullPath = Path.GetFullPath(uri.LocalPath);
+		fragment = uri.Fragment.Length > 0 ? uri.Fragment[1..] : string.Empty;
+		return TryResolveDocumentFullPath(fullPath, out file);
+	}
+	bool TryResolveDocumentPath(string pathOrUrl, out string file, out string fragment) {
+		file = string.Empty;
+		fragment = string.Empty;
+		if (string.IsNullOrWhiteSpace(pathOrUrl)) return false;
+
+		if (Uri.TryCreate(pathOrUrl, UriKind.Absolute, out var uri) && uri.IsFile) {
+			fragment = uri.Fragment.Length > 0 ? uri.Fragment[1..] : string.Empty;
+			return TryResolveDocumentFullPath(Path.GetFullPath(uri.LocalPath), out file);
+		}
+		if (Uri.TryCreate(pathOrUrl, UriKind.Absolute, out _) && !Path.IsPathRooted(pathOrUrl)) return false;
+
+		string path = pathOrUrl;
+		int hashIndex = path.IndexOf('#');
+		if (hashIndex >= 0) {
+			fragment = path[(hashIndex + 1)..];
+			path = path[..hashIndex];
+		}
+
+		if (!TryResolveWorkspacePath(Uri.UnescapeDataString(path), out string fullPath)) return false;
+		return TryResolveDocumentFullPath(fullPath, out file);
+	}
+	bool TryResolveDocumentFullPath(string fullPath, out string file) {
+		file = string.Empty;
 		if (!IsDocumentFile(fullPath)) return false;
 		// File navigations are limited to workspace documents.
 		if (!IsPathInsideRoot(fullPath, workspaceRoot)) return false;
 		if (!File.Exists(fullPath)) return false;
 
-		file = fullPath;
-		fragment = uri.Fragment.Length > 0 ? uri.Fragment[1..] : string.Empty;
+		file = ToWorkspacePath(fullPath);
 		return true;
+	}
+	string ToWorkspacePath(string path) {
+		if (string.IsNullOrWhiteSpace(path)) return string.Empty;
+		if (!TryResolveWorkspacePath(path, out string fullPath)) return NormalizeRelativePath(path);
+
+		return Path.GetRelativePath(workspaceRoot, fullPath)
+			.Replace(Path.DirectorySeparatorChar, '/')
+			.Replace(Path.AltDirectorySeparatorChar, '/');
+	}
+	bool TryResolveWorkspacePath(string workspacePath, out string fullPath) {
+		fullPath = string.Empty;
+		if (string.IsNullOrWhiteSpace(workspacePath)) return false;
+
+		try {
+			string normalized = workspacePath.Replace('/', Path.DirectorySeparatorChar);
+			string candidate = Path.IsPathRooted(normalized)
+				? Path.GetFullPath(normalized)
+				: Path.GetFullPath(Path.Combine(workspaceRoot, normalized));
+
+			if (!IsPathInsideRoot(candidate, workspaceRoot)) return false;
+
+			fullPath = candidate;
+			return true;
+		} catch {
+			return false;
+		}
+	}
+	static string NormalizeRelativePath(string path) {
+		return path.TrimStart('/', '\\')
+			.Replace('\\', '/');
 	}
 	static bool IsHtmlFile(string file) {
 		string ext = Path.GetExtension(file);
@@ -833,6 +923,14 @@ internal sealed class WebView : IDisposable {
 		return fullPath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase);
 	}
 	async Task OpenDocument(string file, string fragment, bool addHistory = true) {
+		if (!TryResolveDocumentPath(file, out string relativeFile, out string resolvedFragment)) {
+			await ShowError("File not found:\\n" + file);
+			return;
+		}
+
+		file = relativeFile;
+		if (string.IsNullOrEmpty(fragment)) fragment = resolvedFragment;
+
 		if (IsHtmlFile(file)) {
 			await OpenHtml(file, fragment, addHistory);
 			return;
@@ -841,6 +939,8 @@ internal sealed class WebView : IDisposable {
 		await OpenMhtml(file, fragment, addHistory);
 	}
 	Task OpenHtml(string file, string fragment, bool addHistory = true, bool navigate = true) {
+		if (!TryResolveWorkspacePath(file, out string fullPath)) return Task.CompletedTask;
+		file = ToWorkspacePath(fullPath);
 		currentFilePath = file;
 		pendingFragment = fragment;
 		currentDocument = null;
@@ -849,11 +949,12 @@ internal sealed class WebView : IDisposable {
 		if (addHistory) AddHistory(NavigationEntry.Document(file, fragment));
 		if (navigate) {
 			pendingLocalHtmlNavigationPath = file;
-			viewerWeb!.Navigate(new Uri(file).AbsoluteUri);
+			viewerWeb!.Navigate(new Uri(fullPath).AbsoluteUri);
 		}
 		return Task.CompletedTask;
 	}
 	async Task OpenMhtml(string file, string fragment, bool addHistory = true) {
+		file = ToWorkspacePath(file);
 		currentFilePath = file;
 		pendingFragment = fragment;
 		currentDocument = documentCache.GetOrAdd(file, LoadDocument);
@@ -911,10 +1012,36 @@ internal sealed class WebView : IDisposable {
 	void ApplyViewerCache(ViewerCacheData cache) {
 		contentLocationMap.Clear();
 		foreach (var kv in cache.ContentLocations) {
-			contentLocationMap[kv.Key] = kv.Value;
+			contentLocationMap[kv.Key] = ToWorkspacePath(kv.Value);
 		}
 
-		firstFilePath = cache.FirstFile;
+		firstFilePath = ToWorkspacePath(cache.FirstFile);
+	}
+	void NormalizePersistedState() {
+		string? lastFile = State.Current.LastFile;
+		if (string.IsNullOrWhiteSpace(lastFile)) return;
+
+		if (TryResolveDocumentPath(lastFile, out string relativeFile, out _)) {
+			if (!relativeFile.Equals(lastFile, StringComparison.OrdinalIgnoreCase)) {
+				State.Current.LastFile = relativeFile;
+				State.Save(State.Current);
+			}
+			return;
+		}
+
+		State.Current.LastFile = null;
+		State.Save(State.Current);
+	}
+	void NormalizeTreePaths(List<Node> nodes) {
+		foreach (Node node in nodes) {
+			if (!string.IsNullOrWhiteSpace(node.Path)) {
+				node.Path = ToWorkspacePath(node.Path);
+			}
+
+			if (node.Children != null) {
+				NormalizeTreePaths(node.Children);
+			}
+		}
 	}
 
 	/// <summary>
@@ -929,7 +1056,10 @@ internal sealed class WebView : IDisposable {
 
 		string baseUrl = ContentLocationIndexBuilder.NormalizeUrl(url);
 
-		if (contentLocationMap.TryGetValue(baseUrl, out file!)) return true;
+		if (contentLocationMap.TryGetValue(baseUrl, out string? mappedFile) &&
+			TryResolveDocumentPath(mappedFile, out file, out _)) {
+			return true;
+		}
 		else return false;
 	}
 
@@ -942,9 +1072,13 @@ internal sealed class WebView : IDisposable {
 
 		string contentType = resource.ContentType;
 		string headers = $"Content-Type: {contentType}\r\nAccess-Control-Allow-Origin: *";
-		Stream stream = resource.FilePath != null
-			? new FileStream(resource.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan)
-			: new MemoryStream(resource.Bytes!, writable: false);
+		Stream stream;
+		if (resource.FilePath != null) {
+			if (!TryResolveWorkspacePath(resource.FilePath, out string filePath) || !File.Exists(filePath)) return;
+			stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan);
+		} else {
+			stream = new MemoryStream(resource.Bytes!, writable: false);
+		}
 
 		e.Response = viewerWeb.Environment.CreateWebResourceResponse(stream, 200, "OK", headers);
 	}
@@ -974,7 +1108,11 @@ internal sealed class WebView : IDisposable {
 		return document.ResourcesByUrl.TryGetValue(requestUrl, out resource!);
 	}
 	LoadedDocument LoadDocument(string file) {
-		return MhtmlDocumentLoader.Load(file, offlineAssets, DocumentResourceHost);
+		if (!TryResolveWorkspacePath(file, out string fullPath)) {
+			throw new InvalidOperationException($"Document path is outside the workspace: {file}");
+		}
+
+		return MhtmlDocumentLoader.Load(fullPath, offlineAssets, DocumentResourceHost);
 	}
 
 	/// <summary>

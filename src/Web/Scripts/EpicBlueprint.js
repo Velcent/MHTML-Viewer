@@ -5,14 +5,12 @@
 	if (window.__mhtmlEpicBlueprintReady) return;
 	window.__mhtmlEpicBlueprintReady = true;
 
-	// Prefer local mirrored assets first; fall back to Epic CDN when the viewer is online.
+	// Load the mirrored blueprint assets through the workspace-backed media host.
 	const jsUrls = [
-		"https://media.local/assets/epic/blueprint_render.min.js",
-		"https://dev.epicgames.com/community/assets/javascript/blueprint_render.min.js"
+		"https://media.local/assets/epic/blueprint_render.min.js"
 	];
 	const cssUrls = [
-		"https://media.local/assets/epic/blueprint_render.min.css",
-		"https://dev.epicgames.com/community/assets/styles/libs/blueprint_render.min.css"
+		"https://media.local/assets/epic/blueprint_render.min.css"
 	];
 	const defaultHeight = "55vh";
 	let libraryPromise = null;

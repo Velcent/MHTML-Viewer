@@ -17,13 +17,35 @@ internal static class OfflineAssetIndex {
 			if (parts.Length < 6) continue;
 
 			string link = parts[0].Trim();
-			string relativePath = parts[1].Trim().Replace('/', Path.DirectorySeparatorChar);
+			string relativePath = NormalizeWorkspacePath(parts[1].Trim(), rootDirectory);
 			string contentType = parts[2].Trim();
-			string fullPath = Path.GetFullPath(Path.Combine(rootDirectory, relativePath));
 
-			map[link] = new OfflineAsset(fullPath, contentType);
+			if (!string.IsNullOrEmpty(relativePath)) {
+				map[link] = new OfflineAsset(relativePath, contentType);
+			}
 		}
 
 		return map;
+	}
+
+	static string NormalizeWorkspacePath(string path, string rootDirectory) {
+		if (string.IsNullOrWhiteSpace(path)) return string.Empty;
+
+		string normalized = path.Replace('\\', '/').TrimStart('/');
+		bool rootedRelative = (path.StartsWith("/", StringComparison.Ordinal) && !path.StartsWith("//", StringComparison.Ordinal))
+			|| (path.StartsWith("\\", StringComparison.Ordinal) && !path.StartsWith("\\\\", StringComparison.Ordinal));
+		if (rootedRelative) {
+			return normalized;
+		}
+		if (!Path.IsPathRooted(path)) return normalized;
+
+		string fullPath = Path.GetFullPath(path);
+		string rootPath = Path.GetFullPath(rootDirectory);
+		if (!rootPath.EndsWith(Path.DirectorySeparatorChar)) rootPath += Path.DirectorySeparatorChar;
+		if (!fullPath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase)) return string.Empty;
+
+		return Path.GetRelativePath(rootDirectory, fullPath)
+			.Replace(Path.DirectorySeparatorChar, '/')
+			.Replace(Path.AltDirectorySeparatorChar, '/');
 	}
 }

@@ -10,14 +10,14 @@ internal static class ContentLocationIndexBuilder {
 	/// <summary>
 	/// Builds a lookup from the original captured URL to its local MHTML file.
 	/// </summary>
-	public static Dictionary<string, string> Build(string root) {
+	public static Dictionary<string, string> Build(string root, string workspaceRoot) {
 		var map = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		if (!Directory.Exists(root)) return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
 		// Each MHTML file stores the original captured URL near the top, so a small prefix read is enough.
 		Parallel.ForEach(
 			Directory.EnumerateFiles(root, "*.mhtml", SearchOption.AllDirectories),
-			file => TryAddFile(map, file)
+			file => TryAddFile(map, file, workspaceRoot)
 		);
 
 		return map.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
@@ -37,7 +37,7 @@ internal static class ContentLocationIndexBuilder {
 		return url;
 	}
 
-	static void TryAddFile(ConcurrentDictionary<string, string> map, string file) {
+	static void TryAddFile(ConcurrentDictionary<string, string> map, string file, string workspaceRoot) {
 		// The snapshot header is emitted before the MIME body; reading the first 512 bytes avoids full-file IO.
 		Span<byte> buffer = stackalloc byte[512];
 		using var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, 512, FileOptions.SequentialScan);
@@ -54,6 +54,13 @@ internal static class ContentLocationIndexBuilder {
 		if (end < 0) end = text.Length;
 
 		string location = NormalizeUrl(text[start..end]);
-		map.TryAdd(location, file);
+		map.TryAdd(location, ToWorkspacePath(workspaceRoot, file));
+	}
+
+	static string ToWorkspacePath(string workspaceRoot, string path) {
+		string relative = Path.GetRelativePath(workspaceRoot, path);
+		return relative
+			.Replace(Path.DirectorySeparatorChar, '/')
+			.Replace(Path.AltDirectorySeparatorChar, '/');
 	}
 }

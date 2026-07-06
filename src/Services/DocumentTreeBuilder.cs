@@ -9,7 +9,7 @@ internal static class DocumentTreeBuilder {
 	/// <summary>
 	/// Builds the sidebar tree from local MHTML/HTML files and folds platform/API variants into one entry.
 	/// </summary>
-	public static List<Node> Build(string root) {
+	public static List<Node> Build(string root, string workspaceRoot) {
 		// Variant files such as "[Windows]" or "[Blueprint]" represent one logical topic in the sidebar.
 		List<string> allFiles = Directory
 			.EnumerateFiles(root, "*.mhtml", SearchOption.AllDirectories)
@@ -25,7 +25,7 @@ internal static class DocumentTreeBuilder {
 			.GroupBy(file => Path.GetDirectoryName(file)!)
 			.ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
 
-		return BuildNode(root, filesByDir);
+		return BuildNode(root, filesByDir, workspaceRoot);
 	}
 
 	/// <summary>
@@ -46,7 +46,7 @@ internal static class DocumentTreeBuilder {
 	/// <summary>
 	/// Fallback first-file lookup used when the tree cache is not available.
 	/// </summary>
-	public static string FindFirstFile(string root) {
+	public static string FindFirstFile(string root, string workspaceRoot) {
 		IOrderedEnumerable<string> files = Directory.GetFiles(root, "*.mhtml", SearchOption.AllDirectories)
 			.GroupBy(GetSwitchVariantGroupKey, StringComparer.OrdinalIgnoreCase)
 			.Select(group => group
@@ -56,10 +56,11 @@ internal static class DocumentTreeBuilder {
 			.OrderBy(file => ExtractNumber(Path.GetFileName(file)))
 			.ThenBy(file => file);
 
-		return files.FirstOrDefault() ?? string.Empty;
+		string first = files.FirstOrDefault() ?? string.Empty;
+		return string.IsNullOrEmpty(first) ? string.Empty : ToWorkspacePath(workspaceRoot, first);
 	}
 
-	static List<Node> BuildNode(string currentDir, Dictionary<string, List<string>> filesByDir) {
+	static List<Node> BuildNode(string currentDir, Dictionary<string, List<string>> filesByDir, string workspaceRoot) {
 		var items = new ConcurrentBag<Node>();
 
 		// Files and folders are collected in parallel, then sorted once at the end for deterministic output.
@@ -67,7 +68,7 @@ internal static class DocumentTreeBuilder {
 			Parallel.ForEach(files, file => {
 				items.Add(new Node {
 					Name = DecodeTreeName(GetSwitchVariantBaseName(Path.GetFileNameWithoutExtension(file))),
-					Path = file,
+					Path = ToWorkspacePath(workspaceRoot, file),
 					KeepNumbering = IsInsideApiReferencePath(file)
 				});
 			});
@@ -76,7 +77,7 @@ internal static class DocumentTreeBuilder {
 		Parallel.ForEach(Directory.EnumerateDirectories(currentDir), dir => {
 			if (!HasContent(dir, filesByDir)) return;
 
-			List<Node> children = BuildNode(dir, filesByDir);
+			List<Node> children = BuildNode(dir, filesByDir, workspaceRoot);
 			// If a folder has a same-named document, clicking the folder opens that overview page.
 			string? twinFile = filesByDir.TryGetValue(currentDir, out List<string>? currentFiles)
 				? currentFiles.FirstOrDefault(file =>
@@ -86,7 +87,7 @@ internal static class DocumentTreeBuilder {
 
 			items.Add(new Node {
 				Name = DecodeTreeName(Path.GetFileName(dir)),
-				Path = twinFile ?? FindFirstFromCache(dir, filesByDir),
+				Path = ToWorkspacePath(workspaceRoot, twinFile ?? FindFirstFromCache(dir, filesByDir)),
 				KeepNumbering = IsInsideApiReferencePath(dir),
 				Children = children
 			});
@@ -165,6 +166,14 @@ internal static class DocumentTreeBuilder {
 			.Where(kv => kv.Key.StartsWith(dir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
 			.SelectMany(kv => kv.Value);
 		return SortFilesForTree(dir, nestedFiles).FirstOrDefault() ?? string.Empty;
+	}
+
+	static string ToWorkspacePath(string workspaceRoot, string path) {
+		if (string.IsNullOrWhiteSpace(path)) return string.Empty;
+		string relative = Path.GetRelativePath(workspaceRoot, path);
+		return relative
+			.Replace(Path.DirectorySeparatorChar, '/')
+			.Replace(Path.AltDirectorySeparatorChar, '/');
 	}
 
 	static string DecodeTreeName(string name) {

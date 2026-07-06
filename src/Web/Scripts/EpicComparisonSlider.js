@@ -103,7 +103,9 @@
 				height: 100%;
 				background-position: center;
 				background-repeat: repeat-y;
-				background-image: url(https://edc-cdn.net/assets/images/comparison-slider.svg);
+				background-image:
+					linear-gradient(45deg, transparent 45%, #111 46%, #111 54%, transparent 55%),
+					linear-gradient(-45deg, transparent 45%, #111 46%, #111 54%, transparent 55%);
 				transform: translate(-50%);
 			}
 			.block-comparison-slider.mhtml-comparison-ready .caption-before,

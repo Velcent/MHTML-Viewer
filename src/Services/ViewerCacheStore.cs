@@ -7,7 +7,7 @@ internal static class ViewerCacheStore {
 	public const string FileName = "viewer-cache.bin";
 
 	const string Magic = "MHTMLViewerCache";
-	const int Version = 8;
+	const int Version = 9;
 
 	/// <summary>
 	/// Reads the precomputed tree/link cache. Invalid or stale cache files are treated as cache misses.

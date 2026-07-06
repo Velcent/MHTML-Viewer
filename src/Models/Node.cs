@@ -9,7 +9,7 @@ internal sealed class Node {
 	[JsonPropertyName("name")]
 	public string Name { get; set; } = string.Empty;
 
-	/// <summary>Absolute file path opened when this item is selected.</summary>
+	/// <summary>Relative file path opened when this item is selected.</summary>
 	[JsonPropertyName("path")]
 	public string Path { get; set; } = string.Empty;
 
