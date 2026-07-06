@@ -249,7 +249,7 @@
 
 		const lineCount = countLines(code.dataset.mhtmlRawCode || code.textContent || "");
 		const canExpand = shouldShowExpand(actions, lineCount);
-		wireButtons(snippet, actions, canExpand);
+		wireButtons(snippet, actions, canExpand, lineCount);
 		setExpanded(snippet, !canExpand);
 	}
 
@@ -271,7 +271,7 @@
 		return actions;
 	}
 
-	function wireButtons(snippet, actions, canExpand) {
+	function wireButtons(snippet, actions, canExpand, lineCount) {
 		const buttons = Array.from(actions.querySelectorAll("button"));
 		let expand = buttons.find(button => button.dataset.mhtmlCodeAction === "expand" || /expand|collapse|show/i.test(button.textContent || ""));
 		let copy = buttons.find(button => button.dataset.mhtmlCodeAction === "copy" || /copy/i.test(button.textContent || ""));
@@ -301,7 +301,10 @@
 		}
 
 		copy.dataset.mhtmlCodeAction = "copy";
-		copy.dataset.mhtmlCodeSuffix = copy.querySelector(".ps-1")?.textContent || copy.dataset.mhtmlCodeSuffix || "";
+		copy.dataset.mhtmlCodeSuffix = copy.querySelector(".ps-1")?.textContent
+			|| copy.dataset.mhtmlCodeSuffix
+			|| formatLineCountSuffix(lineCount);
+		setButtonLabel(copy, readButtonLabel(copy) || copyText);
 		copy.addEventListener("click", async event => {
 			event.preventDefault();
 			const previous = readButtonLabel(copy) || copyText;
@@ -320,6 +323,11 @@
 		if (/expand|collapse|show/i.test(text)) return true;
 		const match = text.match(/\((\d+)\s+lines?\s+long\)/i);
 		return match ? Number(match[1]) > collapsedLines : false;
+	}
+
+	function formatLineCountSuffix(lineCount) {
+		if (!lineCount) return "";
+		return `(${lineCount} ${lineCount === 1 ? "line" : "lines"} long)`;
 	}
 
 	function setExpanded(snippet, expanded) {
