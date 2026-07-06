@@ -1096,7 +1096,8 @@ internal sealed class WebView : IDisposable {
 		}
 
 		return optionsByKey.Values
-			.OrderBy(option => option.Label, StringComparer.OrdinalIgnoreCase)
+			.OrderBy(option => GetSwitchDefaultRank(option.Key))
+			.ThenBy(option => option.Label, StringComparer.OrdinalIgnoreCase)
 			.ToList();
 	}
 	static bool TrySplitSwitchVariantName(string name, out string baseName, out List<string> variants) {
@@ -1133,6 +1134,14 @@ internal sealed class WebView : IDisposable {
 	static string NormalizeSwitchVariantKey(string value) {
 		string cleaned = CleanSwitchVariantText(value).ToLowerInvariant();
 		return Regex.Replace(cleaned, @"[^a-z0-9+#]+", "-").Trim('-');
+	}
+	static int GetSwitchDefaultRank(string key) {
+		// These are exact default candidates, not generated/static options.
+		return key.ToLowerInvariant() switch {
+			"windows" => 0,
+			"c++" => 1,
+			_ => 2
+		};
 	}
 	static string FormatSwitchVariantLabel(string value) {
 		string cleaned = CleanSwitchVariantText(value)
