@@ -274,11 +274,13 @@
 		function initTree(data, firstPath, state) {
 			// Render cached tree data, restore persisted state, then open the best initial document.
 			renderTree(data);
-			const lastNode = state.lastFile ? findNodeByPath(state.lastFile) : null;
-			const target = lastNode ? state.lastFile : firstPath;
-			const node = lastNode || (firstPath ? findNodeByPath(firstPath) : null);
-			if (target && node && !node.classList.contains('active')) {
-				setInitialActive(node);
+			const lastPath = state.lastFile || "";
+			const lastNode = lastPath ? findNodeByPath(lastPath) : null;
+			const lastSwitchNode = lastNode || (lastPath ? findNodeBySwitchGroupPath(lastPath) : null);
+			const target = lastPath || firstPath;
+			const node = lastSwitchNode || (!lastPath && firstPath ? findNodeByPath(firstPath) : null);
+			if (target) {
+				if (node && !node.classList.contains('active')) setInitialActive(node);
 				openFile(target);
 			}
 			setCollapsed(state.collapsed);			
@@ -440,6 +442,31 @@
 				if (p && p.toLowerCase() === lower) return node;
 			}
 			return null;
+		}
+
+		function findNodeBySwitchGroupPath(path) {
+			const target = switchGroupPath(path);
+			if (!target) return null;
+			for (const node of document.querySelectorAll(".item")) {
+				const p = node.dataset.path;
+				if (p && switchGroupPath(p) === target) return node;
+			}
+			return null;
+		}
+
+		function switchGroupPath(path) {
+			const normalized = String(path || "").replace(/\\/g, "/").toLowerCase();
+			const slash = normalized.lastIndexOf("/");
+			const dir = slash >= 0 ? normalized.slice(0, slash + 1) : "";
+			const name = slash >= 0 ? normalized.slice(slash + 1) : normalized;
+			const dot = name.lastIndexOf(".");
+			const base = dot >= 0 ? name.slice(0, dot) : name;
+			const ext = dot >= 0 ? name.slice(dot) : "";
+			let group = base;
+			while (/\s*\[[^\]]+\]\s*$/.test(group)) {
+				group = group.replace(/\s*\[[^\]]+\]\s*$/, "");
+			}
+			return group === base ? "" : dir + group + ext;
 		}
 
 		const loadingOverlay = document.getElementById("loadingOverlay");
