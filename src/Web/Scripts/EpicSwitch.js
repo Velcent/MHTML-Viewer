@@ -87,7 +87,8 @@
 
 	const views = Array.from(document.querySelectorAll("block-switch-view"));
 	const controls = Array.from(document.querySelectorAll("block-switch-control"));
-	if (!controls.length) return;
+	const tabRoots = Array.from(document.querySelectorAll(".MuiTabs-root"));
+	if (!controls.length && !tabRoots.length) return;
 
 	const hostOptions = collectHostOptions();
 	const viewOptions = collectOptions(views);
@@ -101,6 +102,9 @@
 
 	for (const control of controls) {
 		setupControl(control);
+	}
+	for (const tabs of tabRoots) {
+		setupTabs(tabs);
 	}
 	applySelection(selected);
 
@@ -144,8 +148,10 @@
 
 	function readInitialSelection() {
 		const label = document.querySelector("block-switch-control .ng-value-label")?.textContent?.trim();
-		if (!label) return "";
-		return normalizeOption(label);
+		if (label) return normalizeOption(label);
+
+		const selectedTab = document.querySelector(".MuiTabs-root button[role='tab'][aria-selected='true'], .MuiTabs-root .MuiTab-root.Mui-selected");
+		return selectedTab ? normalizeOption(selectedTab.textContent || "") : "";
 	}
 
 	function readViewOption(view) {
@@ -228,6 +234,41 @@
 		});
 	}
 
+	function setupTabs(root) {
+		if (root.dataset.mhtmlSwitchTabsReady === "true") return;
+		const buttons = readTabButtons(root)
+			.map(button => ({ button, option: findOptionForTab(button) }))
+			.filter(item => item.option);
+		if (!buttons.length) return;
+
+		root.dataset.mhtmlSwitchTabsReady = "true";
+		root.classList.add("mhtml-switch-tabs-ready");
+
+		for (const { button, option } of buttons) {
+			button.dataset.mhtmlSwitchOption = option.key;
+			button.addEventListener("click", event => {
+				event.preventDefault();
+				event.stopPropagation();
+				if (option.path && !option.current && navigateToOption(option)) return;
+				selected = option.key;
+				applySelection(selected);
+			});
+		}
+	}
+
+	function readTabButtons(root) {
+		return Array.from(root.querySelectorAll("button[role='tab'], .MuiTab-root"))
+			.filter(button => button instanceof HTMLButtonElement || button.getAttribute("role") === "tab");
+	}
+
+	function findOptionForTab(button) {
+		const key = normalizeOption(button.textContent || button.getAttribute("aria-label") || "");
+		if (!key) return null;
+		return options.find(option => option.key === key)
+			|| options.find(option => normalizeOption(option.label) === key)
+			|| null;
+	}
+
 	function ensureTriggerLabel(select) {
 		const container = select.querySelector(":scope > .ng-select-container");
 		if (!container) return null;
@@ -270,10 +311,33 @@
 			}
 		}
 
+		for (const tabs of tabRoots) {
+			updateTabs(tabs, key);
+		}
+
 		for (const view of views) {
 			const option = readViewOption(view);
 			const viewKey = option?.key ? viewKeyAlias.get(option.key) || option.key : "";
 			view.hidden = !!viewKey && viewKey !== key;
+		}
+	}
+
+	function updateTabs(root, key) {
+		const buttons = readTabButtons(root);
+		let selectedButton = null;
+		for (const button of buttons) {
+			const optionKey = button.dataset.mhtmlSwitchOption || findOptionForTab(button)?.key || normalizeOption(button.textContent || "");
+			const active = optionKey === key;
+			button.classList.toggle("Mui-selected", active);
+			button.setAttribute("aria-selected", active ? "true" : "false");
+			button.setAttribute("tabindex", active ? "0" : "-1");
+			if (active) selectedButton = button;
+		}
+
+		const indicator = root.querySelector(".MuiTabs-indicator");
+		if (indicator && selectedButton) {
+			indicator.style.left = `${selectedButton.offsetLeft}px`;
+			indicator.style.width = `${selectedButton.offsetWidth}px`;
 		}
 	}
 
