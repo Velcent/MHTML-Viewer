@@ -194,32 +194,37 @@ internal sealed class WebView : IDisposable {
 	/// </summary>
 	void ResizeWebView() {
 		CancelSidebarAnimation();
-		ApplyWebViewLayout(GetTargetSidebarWidth());
+		int sidebarW = GetTargetSidebarWidth();
+		ApplyWebViewLayout(sidebarW, sidebarW);
 	}
 	void ApplyWebViewLayout(int sidebarW) {
+		ApplyWebViewLayout(sidebarW, sidebarW);
+	}
+	void ApplyWebViewLayout(int sidebarW, int navWidth) {
 		if (navController == null || viewerController == null || titleController == null || handle == IntPtr.Zero) return;
 		Native.GetClientRect(handle, out var rect);
 		int width = Math.Max(0, rect.Right - rect.Left);
 		int height = Math.Max(0, rect.Bottom - rect.Top);
 		int contentHeight = height - TitleBarHeight;
-		bool isMax = Native.IsZoomed(handle);
-		int border = isMax ? ResizeBorder + 5 : ResizeBorder;
+		int border = GetLayoutBorder();
 		sidebarW = Math.Clamp(sidebarW, 0, Math.Max(0, width - (border * 2)));
+		navWidth = Math.Clamp(navWidth, 0, Math.Max(0, width - (border * 2)));
+		int navX = border - Math.Max(0, navWidth - sidebarW);
 		// Title bar spans the top; sidebar and viewer share the remaining content height.
 		titleController.Bounds = new Rectangle(
 			border,
-			isMax ? border : 0,
+			Native.IsZoomed(handle) ? border : 0,
 			width - (border * 2),
 			TitleBarHeight
 		);
 		navController.Bounds = new Rectangle(
-			border,
-			isMax ? TitleBarHeight + border : TitleBarHeight,
-			sidebarW, contentHeight - border
+			navX,
+			Native.IsZoomed(handle) ? TitleBarHeight + border : TitleBarHeight,
+			navWidth, contentHeight - border
 		);
 		viewerController.Bounds = new Rectangle(
 			sidebarW + border,
-			isMax ? TitleBarHeight + border : TitleBarHeight,
+			Native.IsZoomed(handle) ? TitleBarHeight + border : TitleBarHeight,
 			width - sidebarW - (border * 2), contentHeight - border
 		);
 	}
@@ -228,8 +233,13 @@ internal sealed class WebView : IDisposable {
 		return Math.Clamp(State.Current.SidebarWidth, MinSidebarWidth, MaxSidebarWidth);
 	}
 	int GetCurrentSidebarWidth() {
-		if (navController == null) return GetTargetSidebarWidth();
-		return Math.Max(0, navController.Bounds.Width);
+		if (viewerController == null) return GetTargetSidebarWidth();
+		return Math.Max(0, viewerController.Bounds.Left - GetLayoutBorder());
+	}
+	int GetLayoutBorder() {
+		return handle != IntPtr.Zero && Native.IsZoomed(handle)
+			? ResizeBorder + 5
+			: ResizeBorder;
 	}
 	void CancelSidebarAnimation() {
 		if (sidebarAnimationCts is { IsCancellationRequested: false }) {
@@ -539,14 +549,17 @@ internal sealed class WebView : IDisposable {
 		State.Current.SidebarWidth = Math.Clamp(State.Current.SidebarWidth, MinSidebarWidth, MaxSidebarWidth);
 		State.Current.Collapsed = nextCollapsed;
 		State.Save(State.Current);
-		await UpdateToggleHandle();
+		ObserveScriptFault(UpdateToggleHandle());
+		int navWidth = State.Current.SidebarWidth;
 
 		if (!nextCollapsed) {
-			await SetNavCollapsed(false);
+			ApplyWebViewLayout(startWidth, navWidth);
+			ObserveScriptFault(SetNavCollapsed(false));
 		}
 
-		bool completed = await AnimateSidebarToWidth(startWidth, GetTargetSidebarWidth());
+		bool completed = await AnimateSidebarToWidth(startWidth, GetTargetSidebarWidth(), navWidth);
 		if (completed && nextCollapsed) {
+			ApplyWebViewLayout(0, 0);
 			await SetNavCollapsed(true);
 		}
 	}
@@ -562,14 +575,17 @@ internal sealed class WebView : IDisposable {
 	async Task SetNavCollapsed(bool collapsed) {
 		await navWeb!.ExecuteScriptAsync($"setCollapsed({collapsed.ToString().ToLowerInvariant()})");
 	}
-	async Task<bool> AnimateSidebarToWidth(int startWidth, int targetWidth) {
+	static void ObserveScriptFault(Task task) {
+		_ = task.ContinueWith(faulted => { _ = faulted.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+	}
+	async Task<bool> AnimateSidebarToWidth(int startWidth, int targetWidth, int navWidth) {
 		CancelSidebarAnimation();
 		using var cts = new CancellationTokenSource();
 		sidebarAnimationCts = cts;
 
 		try {
 			if (startWidth == targetWidth) {
-				ApplyWebViewLayout(targetWidth);
+				ApplyWebViewLayout(targetWidth, navWidth);
 				return true;
 			}
 
@@ -578,14 +594,14 @@ internal sealed class WebView : IDisposable {
 				cts.Token.ThrowIfCancellationRequested();
 				double elapsed = Environment.TickCount64 - startedAt;
 				double progress = Math.Clamp(elapsed / SidebarToggleAnimationMs, 0d, 1d);
-				double eased = EaseInOutCubic(progress);
+				double eased = EaseOutCubic(progress);
 				int width = (int)Math.Round(startWidth + ((targetWidth - startWidth) * eased));
-				ApplyWebViewLayout(width);
+				ApplyWebViewLayout(width, navWidth);
 				if (progress >= 1d) break;
 				await Task.Delay(SidebarToggleFrameMs, cts.Token);
 			}
 
-			ApplyWebViewLayout(targetWidth);
+			ApplyWebViewLayout(targetWidth, navWidth);
 			return true;
 		} catch (OperationCanceledException) {
 			return false;
@@ -595,10 +611,8 @@ internal sealed class WebView : IDisposable {
 			}
 		}
 	}
-	static double EaseInOutCubic(double value) {
-		return value < 0.5d
-			? 4d * value * value * value
-			: 1d - Math.Pow(-2d * value + 2d, 3d) / 2d;
+	static double EaseOutCubic(double value) {
+		return 1d - Math.Pow(1d - value, 3d);
 	}
 	async Task UpdateMaximizeState() {
 		bool isMax = Native.IsZoomed(handle);
