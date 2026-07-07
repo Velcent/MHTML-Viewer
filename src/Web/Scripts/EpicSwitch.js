@@ -87,7 +87,7 @@
 
 	const views = Array.from(document.querySelectorAll("block-switch-view"));
 	const controls = Array.from(document.querySelectorAll("block-switch-control"));
-	const tabRoots = Array.from(document.querySelectorAll(".MuiTabs-root"));
+	const tabRoots = readTabRoots();
 	if (!controls.length && !tabRoots.length) return;
 
 	const hostOptions = collectHostOptions();
@@ -123,6 +123,24 @@
 		return Array.from(map, ([key, label]) => ({ key, label }));
 	}
 
+	function readTabRoots() {
+		const roots = [];
+		const seen = new Set();
+		const addRoot = root => {
+			if (!root || seen.has(root)) return;
+			seen.add(root);
+			roots.push(root);
+		};
+
+		for (const wrapper of document.querySelectorAll("div.tabs-wrapper")) {
+			if (wrapper.querySelector(".MuiTabs-root")) addRoot(wrapper);
+		}
+		for (const tabs of document.querySelectorAll(".MuiTabs-root")) {
+			if (!tabs.closest("div.tabs-wrapper")) addRoot(tabs);
+		}
+		return roots;
+	}
+
 	function collectHostOptions() {
 		const items = Array.isArray(window.__mhtmlSwitchOptions) ? window.__mhtmlSwitchOptions : [];
 		const options = [];
@@ -150,7 +168,12 @@
 		const label = document.querySelector("block-switch-control .ng-value-label")?.textContent?.trim();
 		if (label) return normalizeOption(label);
 
-		const selectedTab = document.querySelector(".MuiTabs-root button[role='tab'][aria-selected='true'], .MuiTabs-root .MuiTab-root.Mui-selected");
+		const selectedTab = document.querySelector(
+			"div.tabs-wrapper button[role='tab'][aria-selected='true'], " +
+			"div.tabs-wrapper .MuiTab-root.Mui-selected, " +
+			".MuiTabs-root button[role='tab'][aria-selected='true'], " +
+			".MuiTabs-root .MuiTab-root.Mui-selected"
+		);
 		return selectedTab ? normalizeOption(selectedTab.textContent || "") : "";
 	}
 
