@@ -1204,7 +1204,10 @@ internal sealed class WebView : IDisposable {
 			Match match = Regex.Match(current, @"^(?<base>.+?)\s*\[(?<variant>[^\]]+)\]\s*$");
 			if (!match.Success) break;
 
-			string variant = CleanSwitchVariantText(match.Groups["variant"].Value);
+			string rawVariant = match.Groups["variant"].Value;
+			if (!IsExplicitSwitchVariant(rawVariant)) break;
+
+			string variant = CleanSwitchVariantText(rawVariant);
 			if (string.IsNullOrWhiteSpace(variant)) break;
 
 			variants.Insert(0, variant);
@@ -1226,6 +1229,12 @@ internal sealed class WebView : IDisposable {
 	}
 	static string CleanSwitchVariantText(string value) {
 		return value.Trim().Trim('-').Trim();
+	}
+	static bool IsExplicitSwitchVariant(string value) {
+		string trimmed = value.Trim();
+		return trimmed.Length > 4
+			&& trimmed.StartsWith("--", StringComparison.Ordinal)
+			&& trimmed.EndsWith("--", StringComparison.Ordinal);
 	}
 	static string NormalizeSwitchVariantKey(string value) {
 		string cleaned = CleanSwitchVariantText(value).ToLowerInvariant();

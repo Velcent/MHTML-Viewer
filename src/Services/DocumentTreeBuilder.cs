@@ -10,14 +10,13 @@ internal static class DocumentTreeBuilder {
 	/// Builds the sidebar tree from local MHTML/HTML files and folds platform/API variants into one entry.
 	/// </summary>
 	public static List<Node> Build(string root, string workspaceRoot) {
-		// Variant files such as "[Windows]" or "[Blueprint]" represent one logical topic in the sidebar.
+		// Variant files use explicit "[--Option--]" suffixes and represent one logical topic in the sidebar.
 		List<string> allFiles = Directory
 			.EnumerateFiles(root, "*.mhtml", SearchOption.AllDirectories)
 			.Concat(Directory.EnumerateFiles(root, "*.html", SearchOption.AllDirectories))
 			.GroupBy(GetSwitchVariantGroupKey, StringComparer.OrdinalIgnoreCase)
 			.Select(group => group
-				.OrderBy(GetSwitchVariantPreference)
-				.ThenBy(file => file, StringComparer.OrdinalIgnoreCase)
+				.OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
 				.First())
 			.ToList();
 
@@ -50,8 +49,7 @@ internal static class DocumentTreeBuilder {
 		IOrderedEnumerable<string> files = Directory.GetFiles(root, "*.mhtml", SearchOption.AllDirectories)
 			.GroupBy(GetSwitchVariantGroupKey, StringComparer.OrdinalIgnoreCase)
 			.Select(group => group
-				.OrderBy(GetSwitchVariantPreference)
-				.ThenBy(file => file, StringComparer.OrdinalIgnoreCase)
+				.OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
 				.First())
 			.OrderBy(file => ExtractNumber(Path.GetFileName(file)))
 			.ThenBy(file => file);
@@ -199,66 +197,24 @@ internal static class DocumentTreeBuilder {
 	}
 
 	static string GetSwitchVariantBaseName(string name) {
-		// Strip repeated recognized suffixes: "Foo [Windows] [Blueprint]" becomes "Foo".
+		// Strip repeated explicit dynamic switch suffixes: "Foo [--A--] [--B--]" becomes "Foo".
 		string current = name;
 		while (true) {
 			Match match = Regex.Match(current, @"^(?<base>.+?)\s*\[(?<variant>[^\]]+)\]\s*$");
 			if (!match.Success) return current.TrimEnd();
 
-			string variant = NormalizeSwitchVariant(match.Groups["variant"].Value);
-			if (!IsKnownSwitchVariant(variant)) return current.TrimEnd();
+			string rawVariant = match.Groups["variant"].Value;
+			if (!IsExplicitSwitchVariant(rawVariant)) return current.TrimEnd();
 
 			current = match.Groups["base"].Value;
 		}
 	}
 
-	static int GetSwitchVariantPreference(string file) {
-		// Prefer the most useful local variant for this viewer when multiple captures exist.
-		List<string> variants = GetSwitchVariants(Path.GetFileNameWithoutExtension(file));
-		bool hasWindows = variants.Contains("windows");
-		bool hasBlueprint = variants.Contains("blueprint");
-
-		if (hasWindows && hasBlueprint) return 0;
-		if (hasWindows) return 1;
-		if (hasBlueprint) return 2;
-		if (variants.Count == 0) return 3;
-		if (variants.Contains("c++") || variants.Contains("cpp") || variants.Contains("cplusplus")) return 4;
-		if (variants.Contains("linux")) return 5;
-		if (variants.Contains("macos") || variants.Contains("mac") || variants.Contains("apple")) return 6;
-		return 10;
-	}
-
-	static List<string> GetSwitchVariants(string name) {
-		var variants = new List<string>();
-		string current = name;
-		while (true) {
-			Match match = Regex.Match(current, @"^(?<base>.+?)\s*\[(?<variant>[^\]]+)\]\s*$");
-			if (!match.Success) return variants;
-
-			string variant = NormalizeSwitchVariant(match.Groups["variant"].Value);
-			if (!IsKnownSwitchVariant(variant)) return variants;
-
-			variants.Add(variant);
-			current = match.Groups["base"].Value;
-		}
-	}
-
-	static string NormalizeSwitchVariant(string value) {
-		string normalized = value.Trim().Trim('-').Trim().ToLowerInvariant();
-		return normalized switch {
-			"mac os" => "macos",
-			"mac-os" => "macos",
-			"mac_os" => "macos",
-			"c plus plus" => "cplusplus",
-			"c-plus-plus" => "cplusplus",
-			"c_plus_plus" => "cplusplus",
-			_ => normalized
-		};
-	}
-
-	static bool IsKnownSwitchVariant(string variant) {
-		return variant is "windows" or "linux" or "macos" or "mac" or "apple" or
-			"blueprint" or "c++" or "cpp" or "cplusplus";
+	static bool IsExplicitSwitchVariant(string variant) {
+		string trimmed = variant.Trim();
+		return trimmed.Length > 4
+			&& trimmed.StartsWith("--", StringComparison.Ordinal)
+			&& trimmed.EndsWith("--", StringComparison.Ordinal);
 	}
 
 	static int ExtractNumber(string name) {
