@@ -20,8 +20,6 @@ internal sealed class WebView : IDisposable {
 	const int SidebarToggleFrameMs = 16;
 
 	const string AppTitle = "MHTML Viewer";
-	const string AppVersion = "1.0.0";
-	const string AppDescription = "A simple MHTML viewer using WebView2.";
 	const string IconRes = "app.ico";
 	const string TitleBarRes = "TitleBar.html";
 	const string SidebarRes = "SideBar.html";
