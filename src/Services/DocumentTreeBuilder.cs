@@ -16,7 +16,8 @@ internal static class DocumentTreeBuilder {
 			.Concat(Directory.EnumerateFiles(root, "*.html", SearchOption.AllDirectories))
 			.GroupBy(GetSwitchVariantGroupKey, StringComparer.OrdinalIgnoreCase)
 			.Select(group => group
-				.OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
+				.OrderBy(GetSwitchVariantDefaultRank)
+				.ThenBy(file => file, StringComparer.OrdinalIgnoreCase)
 				.First())
 			.ToList();
 
@@ -49,7 +50,8 @@ internal static class DocumentTreeBuilder {
 		IOrderedEnumerable<string> files = Directory.GetFiles(root, "*.mhtml", SearchOption.AllDirectories)
 			.GroupBy(GetSwitchVariantGroupKey, StringComparer.OrdinalIgnoreCase)
 			.Select(group => group
-				.OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
+				.OrderBy(GetSwitchVariantDefaultRank)
+				.ThenBy(file => file, StringComparer.OrdinalIgnoreCase)
 				.First())
 			.OrderBy(file => ExtractNumber(Path.GetFileName(file)))
 			.ThenBy(file => file);
@@ -197,24 +199,11 @@ internal static class DocumentTreeBuilder {
 	}
 
 	static string GetSwitchVariantBaseName(string name) {
-		// Strip repeated explicit dynamic switch suffixes: "Foo [--A--] [--B--]" becomes "Foo".
-		string current = name;
-		while (true) {
-			Match match = Regex.Match(current, @"^(?<base>.+?)\s*\[(?<variant>[^\]]+)\]\s*$");
-			if (!match.Success) return current.TrimEnd();
-
-			string rawVariant = match.Groups["variant"].Value;
-			if (!IsExplicitSwitchVariant(rawVariant)) return current.TrimEnd();
-
-			current = match.Groups["base"].Value;
-		}
+		return SwitchVariantNaming.GetBaseName(name);
 	}
 
-	static bool IsExplicitSwitchVariant(string variant) {
-		string trimmed = variant.Trim();
-		return trimmed.Length > 4
-			&& trimmed.StartsWith("--", StringComparison.Ordinal)
-			&& trimmed.EndsWith("--", StringComparison.Ordinal);
+	static int GetSwitchVariantDefaultRank(string file) {
+		return SwitchVariantNaming.GetDefaultRankForName(Path.GetFileNameWithoutExtension(file));
 	}
 
 	static int ExtractNumber(string name) {

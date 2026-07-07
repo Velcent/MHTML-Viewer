@@ -1167,7 +1167,7 @@ internal sealed class WebView : IDisposable {
 		if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)) return new List<SwitchVariantOption>();
 
 		string extension = Path.GetExtension(fullPath);
-		if (!TrySplitSwitchVariantName(Path.GetFileNameWithoutExtension(fullPath), out string baseName, out _)) return new List<SwitchVariantOption>();
+		if (!SwitchVariantNaming.TrySplitName(Path.GetFileNameWithoutExtension(fullPath), out string baseName, out _)) return new List<SwitchVariantOption>();
 
 		try {
 			foreach (string candidate in Directory.EnumerateFiles(directory)) {
@@ -1175,92 +1175,26 @@ internal sealed class WebView : IDisposable {
 				if (!Path.GetExtension(candidate).Equals(extension, StringComparison.OrdinalIgnoreCase)) continue;
 
 				string candidateName = Path.GetFileNameWithoutExtension(candidate);
-				if (!TrySplitSwitchVariantName(candidateName, out string candidateBaseName, out List<string> variants)) continue;
+				if (!SwitchVariantNaming.TrySplitName(candidateName, out string candidateBaseName, out List<string> variants)) continue;
 				if (!candidateBaseName.Equals(baseName, StringComparison.OrdinalIgnoreCase)) continue;
 
-				string key = BuildSwitchVariantKey(variants);
+				string key = SwitchVariantNaming.BuildKey(variants);
 				if (string.IsNullOrEmpty(key)) continue;
 
 				string path = ToWorkspacePath(candidate);
 				bool current = candidate.Equals(fullPath, StringComparison.OrdinalIgnoreCase);
 				if (optionsByKey.TryGetValue(key, out SwitchVariantOption? existing) && !current) continue;
 
-				optionsByKey[key] = new SwitchVariantOption(key, BuildSwitchVariantLabel(variants), path, current);
+				optionsByKey[key] = new SwitchVariantOption(key, SwitchVariantNaming.BuildLabel(variants), path, current);
 			}
 		} catch {
 			return new List<SwitchVariantOption>();
 		}
 
 		return optionsByKey.Values
-			.OrderBy(option => GetSwitchDefaultRank(option.Key))
+			.OrderBy(option => SwitchVariantNaming.GetDefaultRank(option.Key))
 			.ThenBy(option => option.Label, StringComparer.OrdinalIgnoreCase)
 			.ToList();
-	}
-	static bool TrySplitSwitchVariantName(string name, out string baseName, out List<string> variants) {
-		baseName = string.Empty;
-		variants = new List<string>();
-		string current = name.TrimEnd();
-		while (true) {
-			Match match = Regex.Match(current, @"^(?<base>.+?)\s*\[(?<variant>[^\]]+)\]\s*$");
-			if (!match.Success) break;
-
-			string rawVariant = match.Groups["variant"].Value;
-			if (!IsExplicitSwitchVariant(rawVariant)) break;
-
-			string variant = CleanSwitchVariantText(rawVariant);
-			if (string.IsNullOrWhiteSpace(variant)) break;
-
-			variants.Insert(0, variant);
-			current = match.Groups["base"].Value.TrimEnd();
-		}
-
-		baseName = current.TrimEnd();
-		return variants.Count > 0 && !string.IsNullOrWhiteSpace(baseName);
-	}
-	static string BuildSwitchVariantKey(IEnumerable<string> variants) {
-		return string.Join("-", variants
-			.Select(NormalizeSwitchVariantKey)
-			.Where(part => !string.IsNullOrWhiteSpace(part)));
-	}
-	static string BuildSwitchVariantLabel(IEnumerable<string> variants) {
-		return string.Join(" / ", variants
-			.Select(FormatSwitchVariantLabel)
-			.Where(part => !string.IsNullOrWhiteSpace(part)));
-	}
-	static string CleanSwitchVariantText(string value) {
-		return value.Trim().Trim('-').Trim();
-	}
-	static bool IsExplicitSwitchVariant(string value) {
-		string trimmed = value.Trim();
-		return trimmed.Length > 4
-			&& trimmed.StartsWith("--", StringComparison.Ordinal)
-			&& trimmed.EndsWith("--", StringComparison.Ordinal);
-	}
-	static string NormalizeSwitchVariantKey(string value) {
-		string cleaned = CleanSwitchVariantText(value).ToLowerInvariant();
-		return Regex.Replace(cleaned, @"[^a-z0-9+#]+", "-").Trim('-');
-	}
-	static int GetSwitchDefaultRank(string key) {
-		// These are exact default candidates, not generated/static options.
-		return key.ToLowerInvariant() switch {
-			"windows" => 0,
-			"c++" => 1,
-			_ => 2
-		};
-	}
-	static string FormatSwitchVariantLabel(string value) {
-		string cleaned = CleanSwitchVariantText(value)
-			.Replace('_', ' ')
-			.Replace('-', ' ');
-		cleaned = Regex.Replace(cleaned, @"\s+", " ").Trim();
-		if (string.IsNullOrWhiteSpace(cleaned)) return string.Empty;
-
-		return string.Join(" ", cleaned.Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(FormatSwitchVariantWord));
-	}
-	static string FormatSwitchVariantWord(string word) {
-		if (string.IsNullOrEmpty(word)) return word;
-		if (word.Any(ch => !char.IsLetter(ch))) return word.ToUpperInvariant();
-		return char.ToUpperInvariant(word[0]) + word[1..];
 	}
 
 	/// <summary>
