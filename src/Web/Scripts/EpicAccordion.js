@@ -25,16 +25,27 @@
 				outline: 2px solid #58c7ff;
 				outline-offset: 4px;
 			}
+			.MuiAccordion-root.mhtml-accordion-ready > .MuiCollapse-root {
+				min-height: 0;
+				transition: height 300ms cubic-bezier(0.4, 0, 0.2, 1);
+				will-change: height;
+			}
 			.MuiAccordion-root.mhtml-accordion-ready > .MuiCollapse-root.MuiCollapse-entered {
+				visibility: visible !important;
+			}
+			.MuiAccordion-root.mhtml-accordion-ready > .MuiCollapse-root.MuiCollapse-entered:not(.mhtml-accordion-animating) {
 				height: auto !important;
 				overflow: visible !important;
-				visibility: visible !important;
 			}
 			.MuiAccordion-root.mhtml-accordion-ready > .MuiCollapse-root.MuiCollapse-hidden {
 				height: 0 !important;
 				overflow: hidden !important;
 				padding-bottom: 0 !important;
 				visibility: hidden !important;
+			}
+			.MuiAccordion-root.mhtml-accordion-ready > .MuiCollapse-root.mhtml-accordion-animating {
+				overflow: hidden !important;
+				visibility: visible !important;
 			}
 			.MuiAccordion-root.mhtml-accordion-ready .MuiAccordionSummary-expandIconWrapper svg {
 				transition: transform 180ms cubic-bezier(0.4, 0, 0.2, 1);
@@ -100,27 +111,98 @@
 	function toggle(root) {
 		const summary = findDirectChild(root, "MuiAccordionSummary-root");
 		if (!summary) return;
-		setExpanded(root, summary.getAttribute("aria-expanded") !== "true");
+		setExpanded(root, summary.getAttribute("aria-expanded") !== "true", true);
 	}
 
-	function setExpanded(root, expanded) {
+	function setExpanded(root, expanded, animate) {
 		const summary = findDirectChild(root, "MuiAccordionSummary-root");
 		const collapse = findDirectChild(root, "MuiCollapse-root");
 		if (!summary || !collapse) return;
 
+		setSummaryState(root, summary, expanded);
+		if (animate) animateCollapse(collapse, expanded);
+		else setCollapseState(collapse, expanded);
+	}
+
+	function setSummaryState(root, summary, expanded) {
 		root.classList.toggle("Mui-expanded", expanded);
 		summary.classList.toggle("Mui-expanded", expanded);
 		summary.setAttribute("aria-expanded", expanded ? "true" : "false");
 		summary.querySelector(".MuiAccordionSummary-content")?.classList.toggle("Mui-expanded", expanded);
 		summary.querySelector(".MuiAccordionSummary-expandIconWrapper")?.classList.toggle("Mui-expanded", expanded);
+	}
 
+	function setCollapseState(collapse, expanded) {
+		clearCollapseAnimation(collapse);
 		collapse.classList.toggle("MuiCollapse-entered", expanded);
 		collapse.classList.toggle("MuiCollapse-hidden", !expanded);
+		collapse.classList.remove("mhtml-accordion-animating");
 		collapse.setAttribute("aria-hidden", expanded ? "false" : "true");
 		collapse.style.height = expanded ? "auto" : "0px";
 		collapse.style.overflow = expanded ? "visible" : "hidden";
 		collapse.style.visibility = expanded ? "visible" : "hidden";
 		if (!collapse.style.minHeight) collapse.style.minHeight = "0px";
+	}
+
+	function animateCollapse(collapse, expanded) {
+		clearCollapseAnimation(collapse);
+		if (!collapse.style.minHeight) collapse.style.minHeight = "0px";
+
+		if (expanded) {
+			const startHeight = Math.max(0, collapse.getBoundingClientRect().height);
+			collapse.classList.remove("MuiCollapse-hidden");
+			collapse.classList.add("MuiCollapse-entered", "mhtml-accordion-animating");
+			collapse.setAttribute("aria-hidden", "false");
+			collapse.style.visibility = "visible";
+			collapse.style.overflow = "hidden";
+			collapse.style.height = `${startHeight}px`;
+
+			requestAnimationFrame(() => {
+				collapse.style.height = `${collapse.scrollHeight}px`;
+				finishCollapseAnimation(collapse, true);
+			});
+			return;
+		}
+
+		const currentHeight = Math.max(0, collapse.getBoundingClientRect().height);
+		const startHeight = currentHeight > 0 ? currentHeight : collapse.scrollHeight;
+		collapse.classList.remove("MuiCollapse-hidden");
+		collapse.classList.add("MuiCollapse-entered", "mhtml-accordion-animating");
+		collapse.style.visibility = "visible";
+		collapse.style.overflow = "hidden";
+		collapse.style.height = `${startHeight}px`;
+		collapse.offsetHeight;
+		collapse.style.height = "0px";
+		finishCollapseAnimation(collapse, false);
+	}
+
+	function finishCollapseAnimation(collapse, expanded) {
+		const done = event => {
+			if (event && (event.target !== collapse || event.propertyName !== "height")) return;
+			clearCollapseAnimation(collapse);
+			collapse.classList.toggle("MuiCollapse-entered", expanded);
+			collapse.classList.toggle("MuiCollapse-hidden", !expanded);
+			collapse.classList.remove("mhtml-accordion-animating");
+			collapse.setAttribute("aria-hidden", expanded ? "false" : "true");
+			collapse.style.height = expanded ? "auto" : "0px";
+			collapse.style.overflow = expanded ? "visible" : "hidden";
+			collapse.style.visibility = expanded ? "visible" : "hidden";
+		};
+
+		collapse.__mhtmlAccordionDone = done;
+		collapse.__mhtmlAccordionTimer = setTimeout(done, 380);
+		collapse.addEventListener("transitionend", done);
+	}
+
+	function clearCollapseAnimation(collapse) {
+		if (collapse.__mhtmlAccordionDone) {
+			collapse.removeEventListener("transitionend", collapse.__mhtmlAccordionDone);
+			collapse.__mhtmlAccordionDone = null;
+		}
+		if (collapse.__mhtmlAccordionTimer) {
+			clearTimeout(collapse.__mhtmlAccordionTimer);
+			collapse.__mhtmlAccordionTimer = null;
+		}
 	}
 
 	function expandHashTarget(scrollAfterOpen) {
