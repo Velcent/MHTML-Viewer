@@ -263,16 +263,23 @@
 		// C# calls initTree/setActiveByPath and receives user actions through chrome.webview messages.
 		const tree = document.getElementById("tree");
 		const errorBox = document.getElementById("error");
+		const sidebar = document.getElementById("sidebar");
 		const resizeHandle = document.getElementById("resizeHandle");
 		let allElements = [];
 		let resizing = false;
 		let collapsed = false;
 		let sidebarWidth = 340;
+		let resizeStartClientX = 0;
+		let resizeStartWidth = sidebarWidth;
+		let resizeCssToHostScale = 1;
+		const minSidebarWidth = 220;
+		const maxSidebarWidth = 720;
 		const ARROW_CLOSED = "\u2b9e";
 		const ARROW_OPEN = "\u2b9f";
 
 		function initTree(data, firstPath, state) {
 			// Render cached tree data, restore persisted state, then open the best initial document.
+			sidebarWidth = clampSidebarWidth(Number(state.sidebarWidth) || sidebarWidth);
 			renderTree(data);
 			const lastPath = state.lastFile || "";
 			const lastNode = lastPath ? findNodeByPath(lastPath) : null;
@@ -379,16 +386,33 @@
 			errorBox.style.display = "none";
 		}
 
-		function resizeSidebar(width) {
+		function resizeSidebar(width, commit = false) {
 			// C# clamps and persists this value too; clamping here keeps drag feedback stable.
-			const nextWidth = Math.max(220, Math.min(720, Math.round(width)));
+			const nextWidth = clampSidebarWidth(width);
 			sidebarWidth = nextWidth;
-			sendMessage({ type: "resizeSidebar", width: nextWidth });
+			sendMessage({ type: "resizeSidebar", width: nextWidth, commit });
+		}
+
+		function clampSidebarWidth(width) {
+			return Math.max(minSidebarWidth, Math.min(maxSidebarWidth, Math.round(width)));
+		}
+
+		function getCssToHostScale() {
+			// WebView zoom changes CSS pixel coordinates; the host splitter uses controller pixels.
+			const cssWidth = window.innerWidth
+				|| document.documentElement.clientWidth
+				|| sidebar.getBoundingClientRect().width;
+			if (!cssWidth) return 1;
+			const scale = sidebarWidth / cssWidth;
+			return Number.isFinite(scale) && scale > 0 ? scale : 1;
 		}
 
 		resizeHandle.addEventListener("pointerdown", e => {
 			if (collapsed) return;
 			resizing = true;
+			resizeStartClientX = e.clientX;
+			resizeStartWidth = sidebarWidth;
+			resizeCssToHostScale = getCssToHostScale();
 			document.body.classList.add("resizing");
 			resizeHandle.setPointerCapture(e.pointerId);
 			e.preventDefault();
@@ -396,13 +420,15 @@
 
 		resizeHandle.addEventListener("pointermove", e => {
 			if (!resizing || collapsed) return;
-			resizeSidebar(e.clientX);
+			const delta = (e.clientX - resizeStartClientX) * resizeCssToHostScale;
+			resizeSidebar(resizeStartWidth + delta);
 			e.preventDefault();
 		});
 
 		resizeHandle.addEventListener("pointerup", e => {
 			resizing = false;
 			document.body.classList.remove("resizing");
+			resizeSidebar(sidebarWidth, true);
 			resizeHandle.releasePointerCapture(e.pointerId);
 			e.preventDefault();
 		});
@@ -410,6 +436,7 @@
 		resizeHandle.addEventListener("pointercancel", () => {
 			resizing = false;
 			document.body.classList.remove("resizing");
+			resizeSidebar(sidebarWidth, true);
 		});
 
 		function setActive(el) {

@@ -642,7 +642,9 @@ internal sealed class WebView : IDisposable {
 					int requestedWidth = msg.RootElement.GetProperty("width").GetInt32();
 					State.Current.SidebarWidth = Math.Clamp(requestedWidth, MinSidebarWidth, MaxSidebarWidth);
 					State.Current.Collapsed = false;
-					State.Save(State.Current);
+					if (msg.RootElement.TryGetProperty("commit", out JsonElement commitElement) && commitElement.GetBoolean()) {
+						State.Save(State.Current);
+					}
 					ResizeWebView();
 					break;
 			}
