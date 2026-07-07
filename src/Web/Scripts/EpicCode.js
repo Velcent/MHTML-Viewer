@@ -33,6 +33,7 @@
 
 	injectStyle();
 	setupCodeSnippets();
+	setupCapturedCodeSnippets();
 	setupPlainSnippets();
 
 	function injectStyle() {
@@ -183,6 +184,13 @@
 			.mhtml-code-literal { color: #71c8ff; }
 			.mhtml-code-builtin { color: #61d6ff; }
 			.mhtml-code-symbol { color: #3aa0ff; }
+			section.code_snippet.mhtml-code-copy-ready > button {
+				transition: background-color 140ms ease, color 140ms ease;
+			}
+			section.code_snippet.mhtml-code-copy-ready > button.is-copied {
+				color: #67e8f9;
+				background: rgba(103, 232, 249, 0.14);
+			}
 		`;
 		document.head.appendChild(style);
 	}
@@ -220,6 +228,76 @@
 			snippet.appendChild(createActions(true));
 			setupSnippet(snippet);
 		}
+	}
+
+	function setupCapturedCodeSnippets() {
+		for (const snippet of document.querySelectorAll("section.code_snippet")) {
+			setupCapturedSnippet(snippet);
+		}
+	}
+
+	function setupCapturedSnippet(snippet) {
+		if (snippet.dataset.mhtmlCodeReady === "true") return;
+		const pre = snippet.querySelector("pre");
+		const copy = findCapturedCopyButton(snippet);
+		if (!pre || !copy) return;
+
+		snippet.dataset.mhtmlCodeReady = "true";
+		snippet.classList.add("mhtml-code-copy-ready");
+		copy.dataset.mhtmlCodeAction = "copy";
+		copy.addEventListener("click", async event => {
+			event.preventDefault();
+			event.stopPropagation();
+			await copyToClipboard(readCapturedSnippetSource(snippet));
+			flashCapturedCopyButton(copy);
+		});
+	}
+
+	function findCapturedCopyButton(snippet) {
+		const buttons = Array.from(snippet.querySelectorAll("button"));
+		return buttons.find(button => {
+			const label = [
+				button.getAttribute("aria-label") || "",
+				button.getAttribute("title") || "",
+				button.textContent || "",
+				button.querySelector("[data-testid*='Copy']") ? "copy" : ""
+			].join(" ");
+			return /\bcopy\b/i.test(label);
+		});
+	}
+
+	function readCapturedSnippetSource(snippet) {
+		const pre = snippet.querySelector("pre");
+		if (!pre) return "";
+
+		const lines = Array.from(pre.querySelectorAll(".token-line"));
+		if (lines.length) {
+			return normalizeSourceText(lines.map(readCapturedLineText).join("\n"));
+		}
+
+		return normalizeSourceText(pre.textContent || "");
+	}
+
+	function readCapturedLineText(line) {
+		return Array.from(line.childNodes)
+			.map(node => node.textContent || "")
+			.join("")
+			.replace(/\r?\n/g, "");
+	}
+
+	function flashCapturedCopyButton(button) {
+		const previousLabel = button.getAttribute("aria-label") || "Copy";
+		const previousTitle = button.getAttribute("title") || previousLabel;
+		button.setAttribute("aria-label", copiedText);
+		button.setAttribute("title", copiedText);
+		button.classList.add("is-copied");
+		clearTimeout(button._mhtmlCodeCopiedTimer);
+		button._mhtmlCodeCopiedTimer = setTimeout(() => {
+			button.setAttribute("aria-label", previousLabel);
+			if (previousTitle) button.setAttribute("title", previousTitle);
+			else button.removeAttribute("title");
+			button.classList.remove("is-copied");
+		}, 1200);
 	}
 
 	function setupSnippet(snippet) {
@@ -528,8 +606,12 @@
 
 	async function copyToClipboard(text) {
 		if (navigator.clipboard && window.isSecureContext) {
-			await navigator.clipboard.writeText(text);
-			return;
+			try {
+				await navigator.clipboard.writeText(text);
+				return;
+			} catch {
+				// WebView/file contexts can expose clipboard but still reject writes.
+			}
 		}
 		const input = document.createElement("textarea");
 		input.value = text;
