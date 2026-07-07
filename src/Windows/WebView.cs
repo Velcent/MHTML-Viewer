@@ -27,6 +27,7 @@ internal sealed class WebView : IDisposable {
 	const string EpicSwitchRes = "EpicSwitch.js";
 	const string EpicCodeRes = "EpicCode.js";
 	const string EpicBlueprintRes = "EpicBlueprint.js";
+	const string EpicAccordionRes = "EpicAccordion.js";
 	const string EpicComparisonSliderRes = "EpicComparisonSlider.js";
 	const string EpicSliderSequenceRes = "EpicSliderSequence.js";
 	const string ToggleSidebarRes = "ToggleSideBar.js";
@@ -243,7 +244,7 @@ internal sealed class WebView : IDisposable {
 
 		// The three WebViews have different UX roles, so settings and zoom are tuned independently.
 		navWeb.Settings.AreDevToolsEnabled = false;
-		viewerWeb.Settings.AreDevToolsEnabled = false;
+		viewerWeb.Settings.AreDevToolsEnabled = true;
 		titleWeb.Settings.AreDevToolsEnabled = false;
 		navWeb.Settings.AreDefaultContextMenusEnabled = false;
 		viewerWeb.Settings.AreDefaultContextMenusEnabled = true;
@@ -499,6 +500,9 @@ internal sealed class WebView : IDisposable {
 	async Task InjectEpicBlueprint() {
 		await viewerWeb!.ExecuteScriptAsync(EmbeddedResourceLoader.LoadText(EpicBlueprintRes));
 	}
+	async Task InjectEpicAccordion() {
+		await viewerWeb!.ExecuteScriptAsync(EmbeddedResourceLoader.LoadText(EpicAccordionRes));
+	}
 	async Task InjectEpicComparisonSlider() {
 		await viewerWeb!.ExecuteScriptAsync(EmbeddedResourceLoader.LoadText(EpicComparisonSliderRes));
 	}
@@ -703,6 +707,7 @@ internal sealed class WebView : IDisposable {
 			await InjectEpicSwitch();
 			await InjectEpicCode();
 			await InjectEpicBlueprint();
+			await InjectEpicAccordion();
 			await InjectEpicComparisonSlider();
 			await InjectEpicSliderSequence();
 			if (!string.IsNullOrWhiteSpace(pendingFragment)) {

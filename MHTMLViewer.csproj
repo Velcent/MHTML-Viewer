@@ -41,6 +41,7 @@
 		<EmbeddedResource Include="src\Web\Scripts\EpicSwitch.js" />
 		<EmbeddedResource Include="src\Web\Scripts\EpicCode.js" />
 		<EmbeddedResource Include="src\Web\Scripts\EpicBlueprint.js" />
+		<EmbeddedResource Include="src\Web\Scripts\EpicAccordion.js" />
 		<EmbeddedResource Include="src\Web\Scripts\EpicComparisonSlider.js" />
 		<EmbeddedResource Include="src\Web\Scripts\EpicSliderSequence.js" />
 		<EmbeddedResource Include="src\Web\Scripts\ToggleSideBar.js" />
