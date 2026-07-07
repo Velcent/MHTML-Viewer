@@ -446,6 +446,10 @@
 		function setInitialActive(el) {
 			document.querySelectorAll(".item").forEach(i => i.classList.remove("active"));
 			el.classList.add("active");
+			expandParents(el);
+			requestAnimationFrame(() => {
+				if (!collapsed) el.scrollIntoView({ block: "nearest" });
+			});
 		}
 
 		function findNodeByPath(path) {
@@ -529,7 +533,7 @@
 		});
 
 		function setActiveByPath(path) {
-			const node = findNodeByPath(path);
+			const node = findNodeByPath(path) || findNodeBySwitchGroupPath(path);
 			if (node) setActive(node);
 		}
 		function openNode(item) {
