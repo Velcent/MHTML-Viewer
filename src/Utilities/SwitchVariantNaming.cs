@@ -68,7 +68,8 @@ internal static class SwitchVariantNaming {
 		return key.ToLowerInvariant() switch {
 			"windows" => 0,
 			"c++" => 1,
-			_ => 2
+			"c" => 2,
+			_ => 3
 		};
 	}
 
